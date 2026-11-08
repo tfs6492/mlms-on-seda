@@ -1,0 +1,498 @@
+---
+title: "MLMs on SEDA"
+author: "Thomas Felix Szymanski"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setenv(LANGUAGE = "en")
+```
+
+
+```{r packages}
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+library(see)
+library(GGally)
+library(nlme)
+```
+
+```{r data}
+# read in data
+# ID columns are read as character: they are long integer codes (NCES IDs can
+# have leading zeros) and are only ever used as join keys.
+chr <- col_character()
+
+cov_geodist_pool <- read_csv("data/seda_cov_geodist_pool_6.0.csv",
+                             col_types = cols(sedalea = chr))
+cov_school_pool  <- read_csv("data/seda_cov_school_pool_6.0.csv",
+                             col_types = cols(sedasch = chr, sedalea = chr, sedaadmin = chr))
+crosswalk        <- read_csv("data/seda_crosswalk_6.0.csv",
+                             col_types = cols(sedasch = chr, ncessch = chr, sedalea = chr, sedaadmin = chr))
+school_pool_gcs  <- read_csv("data/seda_school_pool_gcs_6.0.csv",
+                             col_types = cols(sedasch = chr))
+```
+
+```{r crosswalk-summary}
+# The crosswalk is school x year (2009-2019). Collapse it to one row per school
+# so it can be joined to the pooled files without duplicating schools.
+crosswalk_school <- crosswalk |>
+  arrange(sedasch, year) |>
+  summarise(
+    n_years         = n(),
+    first_year      = min(year),
+    last_year       = max(year),
+    ever_charter    = as.integer(any(charter == 1, na.rm = TRUE)),
+    always_charter  = as.integer(all(charter == 1, na.rm = TRUE)),
+    switched_sector = as.integer(n_distinct(charter, na.rm = TRUE) > 1),
+    ever_virtual    = as.integer(any(virtual == 1, na.rm = TRUE)),
+    last_virtual    = last(last_virtual),
+    non_geo         = last(non_geo),
+    ever_special    = last(ever_special),
+    # location from the most recent year the school appears
+    latcod          = last(latcod),
+    loncod          = last(loncod),
+    .by = sedasch
+  )
+```
+
+```{r join}
+# Analysis file: one row per school with an outcome estimate.
+#   outcomes (sedasch) -> school covariates (sedasch)
+#                      -> district covariates (sedalea, from school covariates)
+#                      -> crosswalk summary (sedasch)
+seda <- school_pool_gcs |>
+  # outcome file carries only the all-students pool, but make that explicit
+  filter(subgroup == "all") |>
+  select(-c(subcat, subgroup, gap, sedaschname, fips, stateabb)) |>
+  left_join(
+    cov_school_pool,
+    by = "sedasch",
+    relationship = "one-to-one"
+  ) |>
+  left_join(
+    # stateabb/fips are already on the school file; overlapping composition
+    # variables (perecd, perwht, totenrl, urbanicity, ...) get a "_dist" suffix
+    cov_geodist_pool |> select(-c(stateabb, fips)),
+    by = "sedalea",
+    suffix = c("", "_dist"),
+    relationship = "many-to-one"
+  ) |>
+  left_join(
+    crosswalk_school,
+    by = "sedasch",
+    relationship = "one-to-one"
+  )
+```
+
+```{r join-checks}
+# Rows should be unchanged by the joins (one row per school)
+stopifnot(nrow(seda) == nrow(school_pool_gcs), !anyDuplicated(seda$sedasch))
+
+# Outcome schools with no school covariates (no sedalea -> no nesting)
+seda |> filter(is.na(sedalea)) |> nrow()
+
+# Schools with no district covariates: SEDA's non-geographic placeholder
+# districts (sedalea ending in 9991/9992)
+seda |>
+  filter(!is.na(sedalea), is.na(sedaleaname)) |>
+  count(placeholder = str_detect(sedalea, "999[12]$"))
+
+# Schools that changed sector between 2009 and 2019
+seda |> count(charter, switched_sector)
+```
+
+
+```{r analysis-sample}
+
+# Analysis sample: one data frame used by every plot and model below.
+# `seda` stays the full joined file, so the join checks and the attrition
+# table remain reproducible.
+
+# Covariates needed by any modelling stage (stage 5 included), so all
+# stages are fitted on the same schools
+model_vars <- c(
+  "gcs_mn_lrn_ol", "gcs_mn_lrn_ol_se",           # outcome and its SE
+  "stateabb", "sedalea", "charter",              # nesting and sector
+  "perecd", "lep", "perblk", "perhsp", "perasn", # school composition
+  "totenrl", "mingrd", "maxgrd",                 # size and grade span
+  "sesavgall", "perecd_dist", "urbanicity_dist", "hsecdnec"  # district
+)
+
+# Reason each school is dropped, checked in order (first reason wins)
+seda_flagged <- seda |>
+  mutate(
+    drop_reason = case_when(
+      is.na(gcs_mn_lrn_ol)   ~ "1 no learning rate",
+      is.na(sedalea)         ~ "2 no school covariates",
+      is.na(charter)         ~ "3 charter missing",
+      sch_sped %in% 1        ~ "4 special-education school",
+      last_virtual %in% 1    ~ "5 virtual school",
+      if_any(all_of(model_vars), is.na) ~ "6 covariate missing",
+      .default = "kept"
+    )
+  )
+
+# Attrition by sector (charter status as recorded, NA if unknown)
+seda_flagged |>
+  count(drop_reason, sector = charter) |>
+  pivot_wider(names_from = sector, values_from = n,
+              names_prefix = "charter_", values_fill = 0)
+
+seda_an <- seda_flagged |>
+  filter(drop_reason == "kept") |>
+  select(-drop_reason) |>
+  mutate(
+    sector   = factor(charter, levels = c(0, 1), labels = c("TPS", "Charter")),
+    tps      = 1 - charter,   # numeric sector dummies, for the uncorrelated
+                              # sector-specific random effects
+    log_enrl = log(totenrl),
+    n_grades = maxgrd - mingrd + 1
+  ) |>
+  # Mundlak term: share of the district's (analysis-sample) schools that are
+  # charters; computed after filtering so it describes the modelled schools
+  mutate(charter_share_dist = mean(charter), .by = sedalea) |>
+  # Grand-mean center continuous covariates on the analysis sample; centered
+  # versions get a "_c" suffix, originals are kept for plots and descriptives
+  mutate(
+    across(
+      c(perecd, lep, perblk, perhsp, perasn, log_enrl, n_grades,
+        sesavgall, perecd_dist, hsecdnec, charter_share_dist),
+      \(x) x - mean(x),
+      .names = "{.col}_c"
+    )
+  )
+
+# Final sample size, by sector
+seda_an |> count(sector)
+
+```
+
+
+```{r ecological-analysis}
+
+ecology.dat <- seda_an |> 
+  group_by(sedalea) |> 
+  filter(n_distinct(charter, na.rm = TRUE) == 2) |> 
+  ungroup()
+
+nrow(ecology.dat)
+
+ecology.dat <- ecology.dat |>
+  mutate(
+    across(
+      c(perecd_c, lep_c, perblk_c, perhsp_c, perasn_c, log_enrl_c, n_grades_c),
+      \(x) mean(x),
+      .names = "{.col}_dmean"
+    ),
+    .by = sedalea
+  )
+
+ecology.fit <- 
+  glmer(charter ~ 
+          perecd_c + perecd_c_dmean + lep_c + lep_c_dmean + perblk_c + 
+          perblk_c_dmean +  perhsp_c + perhsp_c_dmean + perasn_c + 
+          perasn_c_dmean + log_enrl_c + log_enrl_c_dmean + n_grades_c +
+          n_grades_c_dmean +
+          sesavgall_c + hsecdnec_c +
+          urbanicity_dist + (1|stateabb/sedalea),
+  # rndm intercepts for state and geographic district (nested w/in)
+  family = binomial,
+  data = ecology.dat)
+
+summary(ecology.fit)
+
+```
+
+
+```{r exploratory-analysis, warning=FALSE}
+
+# assessing the outcome with a density plot
+ggplot(seda_an, aes(x=gcs_mn_lrn_ol))+geom_density()+theme_minimal()
+# assessing the outcome with a qqplot
+ggplot(seda_an, aes(sample = gcs_mn_lrn_ol)) +
+  stat_qq() +
+  stat_qq_line(color = okabeito_colors(3), linewidth = 2) +
+  labs(x = "Theoretical quantiles", y = "Sample quantiles") +
+  theme_minimal()
+
+# frequency table for charter
+table(seda_an$charter)
+
+# 
+pairs_dat <- seda_an |>
+  filter(!is.na(gcs_mn_lrn_ol), !is.na(charter)) |>
+  mutate(
+    sector   = factor(charter, levels = c(0, 1), labels = c("TPS", "Charter")),
+    log_enrl = log(totenrl),
+    n_grades = maxgrd - mingrd + 1
+  ) |>
+  # balance sectors
+  slice_sample(n = 3000, by = sector)
+
+ggpairs(
+  pairs_dat,
+  columns = c("gcs_mn_lrn_ol", "gcs_mn_avg_ol", "perecd", "perwht",
+              "log_enrl", "n_grades", "sesavgall"),
+  aes(color = sector, alpha = 0.5),
+  lower = list(continuous = wrap("points", size = 0.3, alpha = 0.2)),
+  progress = FALSE
+) +
+  scale_colour_okabeito() +
+  scale_fill_okabeito()
+
+```
+
+```{r model-fits}
+
+# models
+# .ucm - unconditional means model: no predictors
+fit.ucm <- lmerTest::lmer(
+  gcs_mn_lrn_ol~(1 | stateabb/sedalea), 
+  # rndm intercepts for state and geographic district (nested w/in)
+  data=seda_an
+  )
+fit.charter.fixef <- lmerTest::lmer(
+  gcs_mn_lrn_ol~factor(charter) + (1 | stateabb/sedalea), 
+  # rndm intercepts for state and geographic district (nested w/in)
+  # (and fixed effects for charter, as given)
+  data=seda_an
+  )
+fit.charter.mundlak <- lmerTest::lmer(
+  gcs_mn_lrn_ol~
+    factor(charter) + charter_share_dist_c + (1 | stateabb/sedalea), 
+  # rndm intercepts for state and geographic district (nested w/in)
+  # Mundlak term (district share of charters), so the
+  # sector coefficient is the within-district charter-TPS gap
+  data=seda_an
+  )
+fit.charter.rndm <- lmerTest::lmer(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data=seda_an
+  )
+# .full - with all predictors
+fit.full.rndm <- lmerTest::lmer(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data = seda_an
+)
+
+summary(fit.ucm)
+summary(fit.charter.fixef)
+summary(fit.charter.mundlak)
+summary(fit.charter.rndm)
+summary(fit.full.rndm)
+
+coefs <- summary(fit.full.rndm)$coef
+coefs
+
+```
+
+```{r model-comparison}
+
+# use an LRT on REML fits (refit = FALSE) since only the rndm part changes
+anova(fit.charter.mundlak, fit.charter.rndm, refit = FALSE)
+# use an LRT on ML fits (refit = TRUE) since the fixed effects differ
+anova(fit.charter.rndm, fit.full.rndm, refit = TRUE)
+
+# ML refits, used only for the AIC/BIC comparisons (fixed effects differ);
+# all estimates and diagnostics use the REML fits
+fit.ucm.ml <- update(object = fit.ucm, REML = FALSE)
+fit.charter.fixef.ml <- update(object = fit.charter.fixef, REML = FALSE)
+fit.charter.mundlak.ml <- update(object = fit.charter.mundlak, REML = FALSE)
+fit.charter.rndm.ml <- update(object = fit.charter.rndm, REML = FALSE)
+fit.full.rndm.ml <- update(object = fit.full.rndm, REML = FALSE)
+
+# comparing all AICs
+aics1 <- AIC(
+  fit.ucm.ml,
+  fit.charter.fixef.ml,fit.charter.mundlak.ml,
+  fit.charter.rndm.ml, fit.full.rndm.ml
+  )
+aics1
+# finding the best (lowest) AIC
+bestAIC <- rownames(aics1)[which.min(aics1$AIC)]
+cat("Best AIC model is # ",bestAIC,"\n")
+
+# examining the variance components, extract epsilon variance
+sig2eps.charter.rndm <- summary(fit.charter.rndm)$sigma^2
+sig2eps.full.rndm <- summary(fit.full.rndm)$sigma^2 
+# extract tps variance
+sig2tps.charter.rndm <- 
+  VarCorr(fit.charter.rndm)$sedalea["factor(charter)0", "factor(charter)0"]
+sig2tps.full.rndm <-
+  VarCorr(fit.full.rndm)$sedalea["factor(charter)0", "factor(charter)0"]
+# extract charter variance
+sig2charter.charter.rndm <- 
+  VarCorr(fit.charter.rndm)$sedalea["factor(charter)1", "factor(charter)1"]
+sig2charter.full.rndm <-
+  VarCorr(fit.full.rndm)$sedalea["factor(charter)1", "factor(charter)1"]
+# extract state variance
+sig2state.charter.rndm <- VarCorr(fit.charter.rndm)$stateabb[1, 1]
+sig2state.full.rndm <- VarCorr(fit.full.rndm)$stateabb[1, 1]
+
+# computing pseudo-R^2 within, fit.charter.rndm vs. fit.full.rndm
+# pseudo-R^2 calc, epsilon variance
+pRSq.eps <- (sig2eps.charter.rndm-sig2eps.full.rndm)/(sig2eps.charter.rndm)
+cat("pseudo-R2-within is ",pRSq.eps,"\n")
+# pseudo-R^2 calc, tps variance
+pRSq.tps <- (sig2tps.charter.rndm-sig2tps.full.rndm)/(sig2tps.charter.rndm)
+cat("pseudo-R2-within is ",pRSq.tps,"\n")
+# pseudo-R^2 calc, charter variance
+pRSq.charter <- 
+  (sig2charter.charter.rndm-sig2charter.full.rndm)/(sig2charter.charter.rndm)
+cat("pseudo-R2-within is ",pRSq.charter,"\n")
+# pseudo-R^2 calc, state variance
+pRSq.state <- 
+  (sig2state.charter.rndm-sig2state.full.rndm)/(sig2state.charter.rndm)
+cat("pseudo-R2-within is ",pRSq.state,"\n")
+
+# Using the BIC, select the "best" model of the five ML fits
+bics1 <- BIC(
+  fit.ucm.ml,
+  fit.charter.fixef.ml,fit.charter.mundlak.ml,
+  fit.charter.rndm.ml, fit.full.rndm.ml
+  )
+bics1
+bestBIC <- rownames(bics1)[which.min(bics1$BIC)]
+
+cat("Best BIC model is # ",bestBIC,"\n")
+
+```
+
+```{r residual-diagnostics}
+
+# Level 1: school residuals
+eps <- residuals(fit.full.rndm)
+
+# Levels 2 and 3: BLUPs
+blups <- ranef(fit.full.rndm)
+blups_dist  <- blups$sedalea
+# columns: factor(charter)0 (TPS), factor(charter)1 (charter)
+blups_state <- blups$stateabb[, 1]
+
+# A sector's district BLUP is only informed by data in districts that
+# actually contain schools of that sector; elsewhere it is a prediction
+# from the other sector's effect and the TPS-charter correlation
+dist_with <- function(sector_value) {
+  seda_an |> filter(charter == sector_value) |> distinct(sedalea) |> pull(sedalea)
+}
+eta_tps <- blups_dist[rownames(blups_dist) %in% dist_with(0), "factor(charter)0"]
+eta_charter <- blups_dist[rownames(blups_dist) %in% dist_with(1), "factor(charter)1"]
+
+# Examine all residuals for normality (density and q-q plots)
+dqplot <- function(x, label) {
+  plot(density(x), main = label)
+  qqnorm(x, main = label)
+  qqline(x)
+}
+
+par(mfrow = c(1, 2))
+dqplot(eps, "Level 1: school residuals")
+dqplot(eta_tps, "Level 2: TPS district BLUPs")
+dqplot(eta_charter, "Level 2: charter district BLUPs")
+dqplot(blups_state, "Level 3: state BLUPs")
+
+
+```
+
+```{r interaction-model}
+
+fit.full.rndm.int <- lmerTest::lmer(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data = seda_an
+)
+
+summary(fit.full.rndm.int)
+
+wt <- aod::wald.test(
+  Sigma=summary(fit.full.rndm.int)$vcov, 
+  b=summary(fit.full.rndm.int)$coef[,"Estimate"], 
+  Terms=17:25
+)
+wt$result
+wt.p_val <- unname(wt$result$chi2["P"])
+
+```
+
+``` {r interaction-model-resid-diagnostics}
+# Compute the BLUPs for this fitted model
+# Level 1: school residuals
+eps.int <- residuals(fit.full.rndm.int)
+
+# Levels 2 and 3: BLUPs
+blups.int <- ranef(fit.full.rndm.int)
+blups_dist.int  <- blups.int$sedalea
+# columns: factor(charter)0 (TPS), factor(charter)1 (charter)
+blups_state.int <- blups.int$stateabb[, 1]
+
+# A sector's district BLUP is only informed by data in districts that
+# actually contain schools of that sector; elsewhere it is a prediction
+# from the other sector's effect and the TPS-charter correlation
+dist_with <- function(sector_value) {
+  seda_an |> filter(charter == sector_value) |> distinct(sedalea) |> pull(sedalea)
+}
+eta_tps.int <- blups_dist.int[rownames(blups_dist.int) %in% dist_with(0), "factor(charter)0"]
+eta_charter.int <- blups_dist.int[rownames(blups_dist.int) %in% dist_with(1), "factor(charter)1"]
+
+# Examine all residuals for normality (density and q-q plots)
+dqplot <- function(x, label) {
+  plot(density(x), main = label)
+  qqnorm(x, main = label)
+  qqline(x)
+}
+
+par(mfrow = c(1, 2))
+dqplot(eps.int, "Level 1: school residuals")
+dqplot(eta_tps.int, "Level 2: TPS district BLUPs")
+dqplot(eta_charter.int, "Level 2: charter district BLUPs")
+dqplot(blups_state.int, "Level 3: state BLUPs")
+
+
+```
+
+``` {r interaction-model-resid-analysis}
+
+sp_dat <- data.frame(eps.int = eps.int, 
+                     gcs_mn_lrn_ol_se = seda_an$gcs_mn_lrn_ol_se)
+
+ggplot(sp_dat, aes(y = gcs_mn_lrn_ol_se, x = eps.int)) +
+  geom_point() +
+  theme_minimal()
+
+head(sort(eps.int), n = 30)
+tail(sort(eps.int), n = 30)
+
+eps.outliers <- c(sort(eps.int)[1:21], tail(sort(eps.int), n = 19))
+eps.outliers.idxs <- which(
+  eps.int %in% eps.outliers
+  )
+eps.outlier.dat <- seda_an[eps.outliers.idxs, ]
+eps.outlier.dat |> count(charter)
+
+hist(x = seda_an$gcs_mn_lrn_ol_se)
+hist(x = eps.outlier.dat$gcs_mn_lrn_ol_se)
+
+```

@@ -1,82 +1,108 @@
-# Charter Schools, Learning Rates, and the Geography of Achievement: Multilevel Models on SEDA
+# Charter and Traditional Public Schools in a Multilevel Frame
 
-A multilevel analysis of U.S. public school achievement using the Stanford Education Data Archive (SEDA 6.0). The project has two parts:
+### Variance components, response surfaces, and measurement error in SEDA 6.0
 
-1. **Primary (causal):** Do charter schools show higher learning rates than comparable traditional public schools in the same district?
-2. **Secondary (descriptive):** How is the variance in school achievement split across states, districts, and schools?
+Author: Thomas Szymanski Status: 🛠️ In progress
 
-> **Status:** In progress. The data have been obtained and profiled; modeling has not yet started. This README will be updated as the project develops.
+------------------------------------------------------------------------
+
+## Overview
+
+This project uses the Stanford Education Data Archive (SEDA 6.0) to study how school **learning rates** (and, as a companion outcome, **average achievement**) vary across states, districts, and schools in the United States. It also asks how that variation **differs between charter schools and traditional public schools (TPS)**.
+
+The analysis is descriptive. Sector is treated as a grouping that may reshape the entire structure of the multilevel model:
+
+- **how much variance** sits at the state, district, and school levels;
+- **the response surface**, meaning the functional form linking the outcome to school composition and district context;
+- **how precisely** each school's outcome is measured, since charter schools tend to be smaller and their estimates noisier.
+
+A separate, secondary analysis models the **ecological selection of schools into the charter sector**. "Ecological" means it uses school- and district-level aggregates, not student-level data.
+
+The emphasis throughout is on choosing, fitting, and defending an appropriate multilevel model: specification, heteroscedastic variance components, known sampling error, missing data, and diagnostics. All results are interpreted as **conditional associations**, not causal effects.
+
+------------------------------------------------------------------------
 
 ## Data
 
-This project uses the SEDA (Stanford Education Data Archive) dataset, version 6.0. SEDA contains average scores on mathematics and ELA (English Language Arts) state tests for grades 3–8 across most public schools in the country between 2009 and 2019. It places all states on a common scale (linked to NAEP), which allows direct comparisons, and it reports a standard error with each estimate.
+**Source:** Reardon, S. F., Ho, A. D., Shear, B. R., Fahle, E. M., Kalogrides, D., Saliba, J., et al. *Stanford Education Data Archive (Version 6.0).* <https://purl.stanford.edu/xh833nn4025>
 
-The dataset offers two outcomes of interest: school average achievement and school learning rate, i.e., growth across grades. Predictors are available at more than one level. At the school level, there are predictors like the percent of economically disadvantaged students, demographics, enrollment, and locale. At the district level, there are predictors such as an SES composite and the percent of English learners.
+- U.S. public schools, grades 3–8, math and reading/ELA state tests, school years 2008–09 through 2018–19.
+- All states linked to a **common NAEP-based scale**, so schools are comparable across states.
+- Metric: **GCS (grade cohort scale)**. 4 equals the national average NAEP 4th-grade score, and one unit is roughly one grade level. A learning rate of 1 means one grade level of growth per grade.
+- Every estimate comes with a **standard error**.
 
-### Files
+### Files (CSV, "pool" form: pooled across years, grades, and subjects)
 
-Four files are used, each pooled across years, grades, and subjects:
+| File | Unit | Role |
+|----|----|----|
+| `seda_school_pool_gcs_6.0` | school | Outcomes and their standard errors |
+| `seda_cov_school_pool_6.0` | school | School covariates; contains `sedalea` (geographic district) and `stateabb`, which define the nesting |
+| `seda_cov_geodist_pool_6.0` | geographic district | District covariates, linked on `sedalea` |
+| `seda_crosswalk_6.0` | school × year | Year-by-year charter status, virtual-school flag, latitude/longitude |
 
-| File | Contents | Role |
-|---|---|---|
-| `seda_school_pool_gcs_6.0.csv` | One row per school (64,415 schools): average achievement (`gcs_mn_avg_ol`) and learning rate (`gcs_mn_lrn_ol`), with standard errors, in grade-level units (4 = the national average NAEP 4th-grade score; one unit ≈ one grade level) | Outcomes |
-| `seda_cov_school_pool_6.0.csv` | School-level predictors (demographics, `perecd`, `lep`, enrollment, locale, 2018 charter status) and each school's geographic district ID (`sedalea`) | School predictors; defines the school-in-district nesting |
-| `seda_cov_geodist_pool_6.0.csv` | District-level predictors (ACS SES composite `sesavgall`, `perell`, segregation indices) | District predictors, linked on `sedalea` |
-| `seda_crosswalk_6.0.csv` | School-by-year records (2009–2019), including charter status in every year and school latitude/longitude | Needed only for the charter analysis |
+### Key variables
 
-Merge keys: outcomes ↔ school covariates on `sedasch`; school ↔ district covariates on `sedalea`. Variable definitions are in the SEDA codebooks (`codebooks/`).
+| Variable | File | Description |
+|----|----|----|
+| `gcs_mn_lrn_ol`, `gcs_mn_lrn_ol_se` | outcomes | **Learning rate** (growth per grade) and its SE (primary outcome) |
+| `gcs_mn_avg_ol`, `gcs_mn_avg_ol_se` | outcomes | **Average achievement** and its SE (companion outcome) |
+| `charter` | school covariates / crosswalk | Charter status (CCD 2018; yearly in crosswalk) |
+| `perecd` | school covariates | Share of economically disadvantaged students |
+| `lep` | school covariates | Share of limited-English-proficient students (CRDC average) |
+| `perwht`, `perblk`, `perhsp`, `perasn`, … | school covariates | Race/ethnicity shares |
+| `totenrl`, `mingrd`, `maxgrd`, `level` | school covariates | Enrollment and grade span |
+| `sesavgall` | district covariates | ACS socioeconomic composite |
+| `perell`, `urbanicity`, `hsecdnec` | district covariates | \% English learners, locale, economic segregation |
 
-### Getting the data
+### Data access
 
-SEDA is free to download from the [SEDA archive](https://edopportunity.org/get-the-data/seda-archive-downloads) after accepting its data use agreement. Place the four CSVs above in `data/`.
+SEDA is free to download after accepting a data use agreement, which does not allow redistribution. **This repository contains code only.** To reproduce the analysis, download the files above from the [SEDA archive](https://edopportunity.org/get-the-data/seda-archive-downloads) and place them in `data/raw/`.
 
-Citation: Reardon, S. F., Ho, A. D., Shear, B. R., Fahle, E. M., Kalogrides, D., Saliba, J., et al. *Stanford Education Data Archive (Version 6.0).* https://purl.stanford.edu/xh833nn4025
+------------------------------------------------------------------------
 
 ## Design
 
-The data are cross-sectional with three levels: about 64 thousand schools nested in about 12.4 thousand geographic districts nested in 50 states plus Washington DC. A further 705 schools sit in 69 non-geographic, state-level placeholder districts that have no district covariates.
+Cross-sectional, three-level nesting:
 
-**Primary research question (causal).** Do charter schools show higher learning rates than comparable traditional public schools in the same district? The outcome is learning rate, and the treatment is attending a charter school; treatment assignment (charter status) is in turn the outcome of the propensity score model. Relevant predictors may include the share of economically disadvantaged students (`perecd`), the percent of limited English proficient students (`lep`), race, enrollment, and the district SES composite.
-
-**Secondary research question (variance decomposition).** How is the variance in school achievement split across states, districts, and schools, with a possible extension to a geospatial component? This uses a more standard `lmer` approach with state and district information. Unlike the primary question, the outcome is average achievement, not learning rate.
-
-## Analysis plan
-
-**Primary question.** An MLM on top of propensity score modeling. The propensity score is itself estimated with a multilevel logistic model, for example:
-
-```r
-glmer(charter ~ ecd + lep + race + enrollment + ses_dist + (1 | district),
-      family = binomial)
+```         
+state (50 + DC)
+ └── geographic district (~12,400; key: sedalea)
+      └── school (~64,000; key: sedasch)   ← sector: charter vs. TPS
 ```
 
-The outcome model is then an MLM of learning rate, fit within propensity score strata or matched sets, e.g.:
+Structural features that shape the modeling:
 
-```r
-lmer(lrn ~ charter + covariates + (1 | state/district))
-```
+- **Sector varies within districts.** About 10% of districts contain charter schools. After dropping schools with missing learning rates, about 930 districts contain both sectors (roughly 2,900 charters and 18,700 TPS). Only these districts directly inform the *within-district* contrast and the district-level covariance between sectors.
+- **"District" means something different for each sector.** SEDA 6.0 places charter schools in the geographic district where they physically sit. For a charter, the district effect therefore reflects local context (neighborhood, labor market, peer schools), not governance by that district.
+- **Many single-school districts**, mostly rural. They identify little about district-level variance.
+- **States with few or no charter schools** contribute TPS information only, which limits how well state-level charter variance can be estimated.
+- **Non-geographic placeholder districts** (705 schools in 69 state-level placeholders) have no district covariates.
 
-**Secondary question.** The model is built as an extension of:
+------------------------------------------------------------------------
 
-```r
-lmer(avg ~ 1 + (1 | state/district))
-```
+## Research questions
 
-**Diagnostics.**
+### RQ1 (primary): How do the variance components and the response surface differ between charter and traditional public schools, controlling for district and state?
 
-- *Propensity score:* overlap plots of propensity scores; covariate balance after matching/subclassification; a sensitivity analysis for unmeasured confounding.
-- *Multilevel models (both questions):* likelihood-ratio tests on the random effects (conservative, since variances are tested on the boundary); normal QQ plots of district- and state-level random effects.
+- **1a. Variance partition by sector.** How is the variance in school learning rates split across states, districts, and schools, and is that split different for charters and TPS? Are charter schools more heterogeneous within a district than TPS, and are a district's charter and TPS outcomes correlated?
+- **1b. Response surface by sector.** Does the functional form of the outcome given school composition (poverty, English learners, race/ethnicity, enrollment, grade span) and district context (SES) differ between the two sectors? This includes slopes, nonlinearity, and within- vs. between-district relationships.
+- **1c. Signal vs. noise.** How much of the apparent between-school variance, and of any sector difference in that variance, is sampling error rather than true variation?
 
-## Anticipated data issues
+### RQ2 (secondary, modeled separately): Which school and district characteristics are associated with a school being a charter?
 
-- **Missing learning rates.** Missing data is minimal for average achievement and for most covariates (under 2% of schools), but not for learning rate. It is missing for 14.5% of schools, mostly those with few tested grades, and for 31% of charter schools compared with 13% of traditional public schools. This gap matters for the primary question and needs to be accounted for.
-- **Charter status over time.** Charter status is recorded for 2018 in the school covariates file and year-by-year in the crosswalk. 423 schools in the sample changed charter status at some point between 2009 and 2019.
-- **Co-location.** Some independently operated charter schools share a building with district public schools. This creates potential spillover: if charter status is the treatment, co-location would violate the no-interference assumption. Co-location, especially on vulnerable campuses, has been known to create pedagogical and practical problems for the public school involved. The plan is to find co-location arrangements and handle them uniformly, for instance by dropping them. The crosswalk's coordinates make a first pass possible: about 580 schools in the outcome file share exact coordinates with a school of the other type in the same year, mostly in CA, NY, and WI. Shared coordinates are only a proxy, though.
-- **Finding comparable schools within districts.** Comparable traditional public schools may be hard to find for some charter schools within the same district.
-- **Narrowing to districts with both school types.** Only about 10% of districts contain any charter school. After dropping schools with missing learning rates, about 930 districts with both school types remain, with roughly 2,900 charters and 18,700 traditional public schools. If matching within districts proves not feasible, one option is matching across districts under both geospatial and modeling-adjacent constraints (e.g., using estimated BLUPs as a similarity metric).
+This is an **ecological** analysis. School composition is partly a *consequence* of charter status (who enrolls), so the model describes how the sectors differ and where charters are located. It does not explain why families choose them.
 
-## Repository structure
+------------------------------------------------------------------------
 
-```
-codebooks/   SEDA 6.0 codebooks (.xlsx)
-data/        SEDA CSVs (see "Getting the data")
-```
+## Data issues
+
+- **Missing learning rates.** Learning rates are missing far more often than average achievement, and much more often for charter schools than for TPS. Some are structurally undefined (too few tested grades to estimate growth); others are suppressed (small cells or imprecision).
+- **Heterogeneous sampling error.** Standard errors vary widely across schools. Smaller schools, and schools testing fewer grades, have noisier estimates.
+- **Raw vs. empirical-Bayes estimates.** SEDA provides both raw (`_ol`) and already-shrunken empirical-Bayes (`_eb`) estimates. The raw estimates are used to avoid shrinking twice inside a multilevel model.
+- **Changes in sector over time.** Some schools converted to or from charter status during 2009–2019, so a single sector label is ambiguous for them.
+- **Virtual schools.** Virtual schools have no meaningful physical location and are flagged separately.
+- **Co-located schools.** Some charter schools share a building with a TPS, which shows up as identical coordinates in the crosswalk.
+- **Non-geographic placeholder districts.** A small number of schools sit in state-level placeholder districts with no district covariates.
+- **Single-school districts.** Many rural districts contain only one school.
+- **Special-education schools.** Schools serving mainly special-education populations are not comparable to general schools.
+- **Free/reduced-price lunch measures.** The Community Eligibility Provision distorts these, so the economically-disadvantaged share (`perecd`) is used instead.
