@@ -10,7 +10,6 @@ knitr::opts_chunk$set(echo = TRUE)
 Sys.setenv(LANGUAGE = "en")
 ```
 
-
 ```{r packages}
 library(lme4)
 library(lmerTest)
@@ -18,9 +17,13 @@ library(tidyverse)
 library(see)
 library(GGally)
 library(nlme)
+library(glmmTMB)
+library(DHARMa)
+library(scales)
+
 ```
 
-```{r data}
+```{r data, eval = FALSE}
 # read in data
 # ID columns are read as character: they are long integer codes (NCES IDs can
 # have leading zeros) and are only ever used as join keys.
@@ -34,9 +37,10 @@ crosswalk        <- read_csv("data/seda_crosswalk_6.0.csv",
                              col_types = cols(sedasch = chr, ncessch = chr, sedalea = chr, sedaadmin = chr))
 school_pool_gcs  <- read_csv("data/seda_school_pool_gcs_6.0.csv",
                              col_types = cols(sedasch = chr))
+
 ```
 
-```{r crosswalk-summary}
+```{r crosswalk-summary, eval = FALSE}
 # The crosswalk is school x year (2009-2019). Collapse it to one row per school
 # so it can be joined to the pooled files without duplicating schools.
 crosswalk_school <- crosswalk |>
@@ -57,9 +61,10 @@ crosswalk_school <- crosswalk |>
     loncod          = last(loncod),
     .by = sedasch
   )
+
 ```
 
-```{r join}
+```{r join, eval = FALSE}
 # Analysis file: one row per school with an outcome estimate.
 #   outcomes (sedasch) -> school covariates (sedasch)
 #                      -> district covariates (sedalea, from school covariates)
@@ -86,9 +91,10 @@ seda <- school_pool_gcs |>
     by = "sedasch",
     relationship = "one-to-one"
   )
+
 ```
 
-```{r join-checks}
+```{r join-checks, eval = FALSE}
 # Rows should be unchanged by the joins (one row per school)
 stopifnot(nrow(seda) == nrow(school_pool_gcs), !anyDuplicated(seda$sedasch))
 
@@ -103,10 +109,10 @@ seda |>
 
 # Schools that changed sector between 2009 and 2019
 seda |> count(charter, switched_sector)
+
 ```
 
-
-```{r analysis-sample}
+```{r analysis-sample, eval = FALSE}
 
 # Analysis sample: one data frame used by every plot and model below.
 # `seda` stays the full joined file, so the join checks and the attrition
@@ -171,8 +177,13 @@ seda_an |> count(sector)
 
 ```
 
+```{r load-data}
+# write_csv(seda_an, "data/seda_an")
+seda_an <- read_csv("data/seda_an")
 
-```{r ecological-analysis}
+```
+
+```{r ecological-fit-one, eval = FALSE}
 
 ecology.dat <- seda_an |> 
   group_by(sedalea) |> 
@@ -181,7 +192,7 @@ ecology.dat <- seda_an |>
 
 nrow(ecology.dat)
 
-ecology.dat <- ecology.dat |>
+ecology.dat1 <- ecology.dat |>
   mutate(
     across(
       c(perecd_c, lep_c, perblk_c, perhsp_c, perasn_c, log_enrl_c, n_grades_c),
@@ -191,33 +202,104 @@ ecology.dat <- ecology.dat |>
     .by = sedalea
   )
 
-ecology.fit <- 
-  glmer(charter ~ 
-          perecd_c + perecd_c_dmean + lep_c + lep_c_dmean + perblk_c + 
-          perblk_c_dmean +  perhsp_c + perhsp_c_dmean + perasn_c + 
-          perasn_c_dmean + log_enrl_c + log_enrl_c_dmean + n_grades_c +
-          n_grades_c_dmean +
-          sesavgall_c + hsecdnec_c +
-          urbanicity_dist + (1|stateabb/sedalea),
+ecology.fit1 <- glmmTMB(
+  charter ~ perecd_c + perecd_c_dmean + lep_c + lep_c_dmean + perblk_c +
+    perblk_c_dmean + perhsp_c + perhsp_c_dmean + perasn_c + perasn_c_dmean +
+    log_enrl_c + log_enrl_c_dmean + n_grades_c + n_grades_c_dmean +
+    sesavgall_c + hsecdnec_c + urbanicity_dist + (1 | stateabb/sedalea),
   # rndm intercepts for state and geographic district (nested w/in)
   family = binomial,
-  data = ecology.dat)
-
-summary(ecology.fit)
+  data   = ecology.dat1
+)
 
 ```
 
+```{r ecological-inspect-one}
+# saveRDS(ecology.fit1, "model-objects/ecology_fit1.rds")
+ecology.fit1 <- readRDS("model-objects/ecology_fit1.rds")
+
+summary(ecology.fit1)
+
+```
+
+```{r ecological-data-prep-plot}
+# one row per district: count of charters, plus district-level predictors
+ecology.dat2 <- seda_an |>
+  summarise(
+    n_charter = sum(charter),
+    n_schools = n(),
+    across(c(perecd_c, lep_c, perblk_c, perhsp_c, perasn_c,
+             log_enrl_c, n_grades_c), mean),           # district means
+    across(c(sesavgall_c, hsecdnec_c, urbanicity_dist), first),  # already district-level
+    .by = c(stateabb, sedalea)
+  )
+
+ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
+  geom_histogram(binwidth = 1, fill = okabeito_colors(3), color = "white") +
+  theme_bw()
+
+ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
+  geom_histogram(
+    binwidth = 1, 
+    fill = okabeito_colors(3), color = "white", 
+    linewidth = 0.2
+    ) +
+  scale_y_continuous(
+    trans = scales::pseudo_log_trans(base = 10),
+    breaks = c(0, 1, 10, 100, 1000, 10000),
+    labels = scales::comma
+  ) +
+  theme_bw()
+
+```
+
+```{r ecological-fit-two, eval = FALSE}
+
+# one row per district: count of charters, plus district-level predictors
+ecology.dat2 <- seda_an |>
+  summarise(
+    n_charter = sum(charter),
+    n_schools = n(),
+    across(c(perecd_c, lep_c, perblk_c, perhsp_c, perasn_c,
+             log_enrl_c, n_grades_c), mean),           # district means
+    across(c(sesavgall_c, hsecdnec_c, urbanicity_dist), first),  # already district-level
+    .by = c(stateabb, sedalea)
+  )
+
+ecology.fit2 <-
+  glmmTMB(n_charter ~
+            perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+            log_enrl_c + n_grades_c +
+            sesavgall_c + hsecdnec_c + urbanicity_dist +
+            offset(log(n_schools)) +
+            (1 | stateabb),
+          family = nbinom2,
+          data = ecology.dat2)
+
+```
+
+```{r ecological-inspect-two}
+# saveRDS(ecology.fit2, "model-objects/ecology_fit2.rds")
+ecology.fit2 <- readRDS("model-objects/ecology_fit2.rds")
+
+summary(ecology.fit2)
+
+simulationOutput <- DHARMa::simulateResiduals(ecology.fit2)
+simulationOutput
+testZeroInflation(simulationOutput = simulationOutput)
+
+```
 
 ```{r exploratory-analysis, warning=FALSE}
 
 # assessing the outcome with a density plot
-ggplot(seda_an, aes(x=gcs_mn_lrn_ol))+geom_density()+theme_minimal()
+ggplot(seda_an, aes(x=gcs_mn_lrn_ol))+geom_density()+theme_bw()
 # assessing the outcome with a qqplot
 ggplot(seda_an, aes(sample = gcs_mn_lrn_ol)) +
   stat_qq() +
   stat_qq_line(color = okabeito_colors(3), linewidth = 2) +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
-  theme_minimal()
+  theme_bw()
 
 # frequency table for charter
 table(seda_an$charter)
@@ -437,7 +519,7 @@ wt.p_val <- unname(wt$result$chi2["P"])
 
 ```
 
-``` {r interaction-model-resid-diagnostics}
+```{r interaction-model-resid-diagnostics}
 # Compute the BLUPs for this fitted model
 # Level 1: school residuals
 eps.int <- residuals(fit.full.rndm.int)
@@ -473,14 +555,14 @@ dqplot(blups_state.int, "Level 3: state BLUPs")
 
 ```
 
-``` {r interaction-model-resid-analysis}
+```{r interaction-model-resid-analysis}
 
 sp_dat <- data.frame(eps.int = eps.int, 
                      gcs_mn_lrn_ol_se = seda_an$gcs_mn_lrn_ol_se)
 
 ggplot(sp_dat, aes(y = gcs_mn_lrn_ol_se, x = eps.int)) +
   geom_point() +
-  theme_minimal()
+  theme_bw()
 
 head(sort(eps.int), n = 30)
 tail(sort(eps.int), n = 30)
