@@ -8,9 +8,10 @@ output: pdf_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 Sys.setenv(LANGUAGE = "en")
+
 ```
 
-```{r packages}
+```{r packages, message = FALSE, warning=FALSE}
 library(lme4)
 library(lmerTest)
 library(tidyverse)
@@ -234,11 +235,13 @@ ecology.dat2 <- seda_an |>
     .by = c(stateabb, sedalea)
   )
 
-ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
+p_n_charter_hist <- ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
   geom_histogram(binwidth = 1, fill = okabeito_colors(3), color = "white") +
   theme_bw()
+p_n_charter_hist
+ggsave("figs/n_charter_hist.png", plot = p_n_charter_hist, width = 6, height = 4, dpi = 300)
 
-ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
+p_n_charter_hist_log <- ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
   geom_histogram(
     binwidth = 1, 
     fill = okabeito_colors(3), color = "white", 
@@ -250,6 +253,8 @@ ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
     labels = scales::comma
   ) +
   theme_bw()
+p_n_charter_hist_log
+ggsave("figs/n_charter_hist_log.png", plot = p_n_charter_hist_log, width = 6, height = 4, dpi = 300)
 
 ```
 
@@ -293,13 +298,17 @@ testZeroInflation(simulationOutput = simulationOutput)
 ```{r exploratory-analysis, warning=FALSE}
 
 # assessing the outcome with a density plot
-ggplot(seda_an, aes(x=gcs_mn_lrn_ol))+geom_density()+theme_bw()
+p_outcome_density <- ggplot(seda_an, aes(x=gcs_mn_lrn_ol))+geom_density()+theme_bw()
+p_outcome_density
+ggsave("figs/outcome_density.png", plot = p_outcome_density, width = 6, height = 4, dpi = 300)
 # assessing the outcome with a qqplot
-ggplot(seda_an, aes(sample = gcs_mn_lrn_ol)) +
+p_outcome_qq <- ggplot(seda_an, aes(sample = gcs_mn_lrn_ol)) +
   stat_qq() +
   stat_qq_line(color = okabeito_colors(3), linewidth = 2) +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
   theme_bw()
+p_outcome_qq
+ggsave("figs/outcome_qq.png", plot = p_outcome_qq, width = 6, height = 4, dpi = 300)
 
 # frequency table for charter
 table(seda_an$charter)
@@ -315,7 +324,7 @@ pairs_dat <- seda_an |>
   # balance sectors
   slice_sample(n = 3000, by = sector)
 
-ggpairs(
+p_pairs <- ggpairs(
   pairs_dat,
   columns = c("gcs_mn_lrn_ol", "gcs_mn_avg_ol", "perecd", "perwht",
               "log_enrl", "n_grades", "sesavgall"),
@@ -325,6 +334,8 @@ ggpairs(
 ) +
   scale_colour_okabeito() +
   scale_fill_okabeito()
+p_pairs
+ggsave("figs/pairs.png", plot = p_pairs, width = 12, height = 12, dpi = 300)
 
 ```
 
@@ -481,10 +492,21 @@ dqplot <- function(x, label) {
 }
 
 par(mfrow = c(1, 2))
+# base-graphics plots: ggsave() cannot save these, so copy the current
+# device to a png file right after drawing each one
+save_base_plot <- function(file) {
+  dev.copy(png, filename = file, width = 8, height = 4, units = "in", res = 300)
+  invisible(dev.off())
+}
+
 dqplot(eps, "Level 1: school residuals")
+save_base_plot("figs/resid_l1_school.png")
 dqplot(eta_tps, "Level 2: TPS district BLUPs")
+save_base_plot("figs/resid_l2_tps.png")
 dqplot(eta_charter, "Level 2: charter district BLUPs")
+save_base_plot("figs/resid_l2_charter.png")
 dqplot(blups_state, "Level 3: state BLUPs")
+save_base_plot("figs/resid_l3_state.png")
 
 
 ```
@@ -548,9 +570,13 @@ dqplot <- function(x, label) {
 
 par(mfrow = c(1, 2))
 dqplot(eps.int, "Level 1: school residuals")
+save_base_plot("figs/resid_int_l1_school.png")
 dqplot(eta_tps.int, "Level 2: TPS district BLUPs")
+save_base_plot("figs/resid_int_l2_tps.png")
 dqplot(eta_charter.int, "Level 2: charter district BLUPs")
+save_base_plot("figs/resid_int_l2_charter.png")
 dqplot(blups_state.int, "Level 3: state BLUPs")
+save_base_plot("figs/resid_int_l3_state.png")
 
 
 ```
@@ -560,9 +586,11 @@ dqplot(blups_state.int, "Level 3: state BLUPs")
 sp_dat <- data.frame(eps.int = eps.int, 
                      gcs_mn_lrn_ol_se = seda_an$gcs_mn_lrn_ol_se)
 
-ggplot(sp_dat, aes(y = gcs_mn_lrn_ol_se, x = eps.int)) +
+p_se_vs_resid <- ggplot(sp_dat, aes(y = gcs_mn_lrn_ol_se, x = eps.int)) +
   geom_point() +
   theme_bw()
+p_se_vs_resid
+ggsave("figs/se_vs_resid.png", plot = p_se_vs_resid, width = 6, height = 4, dpi = 300)
 
 head(sort(eps.int), n = 30)
 tail(sort(eps.int), n = 30)
@@ -575,6 +603,8 @@ eps.outlier.dat <- seda_an[eps.outliers.idxs, ]
 eps.outlier.dat |> count(charter)
 
 hist(x = seda_an$gcs_mn_lrn_ol_se)
+save_base_plot("figs/hist_se_all.png")
 hist(x = eps.outlier.dat$gcs_mn_lrn_ol_se)
+save_base_plot("figs/hist_se_outliers.png")
 
 ```
