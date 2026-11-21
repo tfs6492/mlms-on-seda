@@ -21,6 +21,7 @@ library(nlme)
 library(glmmTMB)
 library(DHARMa)
 library(scales)
+library(brms)
 
 ```
 
@@ -606,5 +607,351 @@ hist(x = seda_an$gcs_mn_lrn_ol_se)
 save_base_plot("figs/hist_se_all.png")
 hist(x = eps.outlier.dat$gcs_mn_lrn_ol_se)
 save_base_plot("figs/hist_se_outliers.png")
+
+```
+
+```{r t_4-mlm}
+
+prior_get <- get_prior(
+  formula = gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c + log_enrl_c + 
+    n_grades_c + sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c + 
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  data = seda_an,
+  family = student(link = "identity")
+  )
+
+prior_get
+
+my_priors <- c(
+    # fix degrees of freedom to 4 (t4 error structure)
+    prior(constant(4), class = nu),
+    # fixed effects
+    prior(normal(0, 0.5), class = b),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perecd_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:lep_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perblk_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perhsp_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perasn_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:log_enrl_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:n_grades_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:sesavgall_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perecd_dist_c"),
+    prior(normal(1, 0.5), class = Intercept),
+    # observation-level scale parameter
+    prior(exponential(3), class = sigma),
+    # group-level standard deviations
+    prior(exponential(3), class = sd),
+    # correlation matrix between varying intercepts & slopes
+    prior(lkj(1), class = cor)
+  )
+
+validate_prior(
+  prior = my_priors, 
+  formula = gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c + log_enrl_c + 
+    n_grades_c + sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c + 
+    (1 | stateabb) + (0 + factor(charter) | sedalea), 
+  data = seda_an,
+  family = student(link = "identity"))
+
+fit.prior.only <- brms::brm(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data = seda_an,
+  family = student(link = "identity"),
+  prior = my_priors,
+  sample_prior = "only",
+  chains = 2,
+  cores = parallel::detectCores() - 1,
+  iter = 1000,
+  seed = 42
+)
+# saveRDS(fit.prior.only, "model-objects/fit.prior.only.RDS")
+fit.prior.only <- readRDS("model-objects/fit.prior.only.RDS")
+
+summary(fit.prior.only)
+
+yrep <- posterior_predict(fit.prior.only)
+
+# quantiles of all simulated outcomes (simulated vs. observed)
+quantile(as.vector(yrep), c(.001, .01, .05, .25, .5, .75, .95, .99, .999))
+quantile(seda_an$gcs_mn_lrn_ol, c(.001, .01, .05, .25, .5, .75, .95, .99, .999))
+
+# share of simulated and observed outcomes between 0 and 2 GCS
+mean(yrep > 0 & yrep < 2)
+mean(seda_an$gcs_mn_lrn_ol > 0 & seda_an$gcs_mn_lrn_ol < 2)
+
+pp_check(fit.prior.only) + coord_cartesian(xlim = c(-3, 5))
+
+priors_fr_gaussian <- c(
+    # fixed effects
+    prior(normal(0, 0.5), class = b),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perecd_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:lep_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perblk_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perhsp_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perasn_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:log_enrl_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:n_grades_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:sesavgall_c"),
+    prior(normal(0, 0.25), class = b, coef = "factorcharter1:perecd_dist_c"),
+    prior(normal(1, 0.5), class = Intercept),
+    # observation-level scale parameter
+    prior(exponential(3), class = sigma),
+    # group-level standard deviations
+    prior(exponential(3), class = sd),
+    # correlation matrix between varying intercepts & slopes
+    prior(lkj(1), class = cor)
+  )
+
+# gaussian model fit
+fit.full.rndm.int.brm.g <- brms::brm(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data = seda_an,
+  family = gaussian(),
+  prior = priors_fr_gaussian,
+  chains = 4,
+  cores = parallel::detectCores() - 1,
+  backend = "cmdstanr",
+  iter = 2000,
+  seed = 42
+)
+# saveRDS(fit.full.rndm.int.brm.g, "model-objects/fit.full.rndm.int.brm.g.RDS")
+fit.full.rndm.int.brm.g <- readRDS("model-objects/fit.full.rndm.int.brm.g.RDS")
+
+summary(fit.full.rndm.int.brm.g)
+
+# t4 model fit
+fit.full.rndm.int.brm.t4 <- brms::brm(
+  gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c + 
+    factor(charter):perblk_c + factor(charter):perhsp_c + 
+    factor(charter):perasn_c + factor(charter):log_enrl_c + 
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  # rndm intercept for state
+  # sector-specific district effects
+  data = seda_an,
+  family = student(link = "identity"),
+  prior = my_priors,
+  chains = 4,
+  cores = parallel::detectCores() - 1,
+  backend = "cmdstanr",
+  iter = 2000,
+  seed = 42
+)
+# saveRDS(fit.full.rndm.int.brm.t4, "model-objects/fit.full.rndm.int.brm.t4.RDS")
+fit.full.rndm.int.brm.t4 <-readRDS(
+  "model-objects/fit.full.rndm.int.brm.t4.RDS"
+  )
+
+summary(fit.full.rndm.int.brm.t4)
+
+# Extract NUTS diagnostics (divergences, treedepth, energy, etc.)
+np <- brms::nuts_params(fit.full.rndm.int.brm.t4)
+
+# Count total divergences
+sum(subset(np, Parameter == "divergent__")$Value)
+
+# treedepth and energy
+rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.t4)
+
+# posterior predictive checks & LOO outlier diagnosis
+pp_check(fit.full.rndm.int.brm.t4, type = "dens_overlay")
+loo_t4 <- loo(fit.full.rndm.int.brm.t4)
+plot(loo_t4, labelpoints = TRUE)
+
+loo_g <- loo(fit.full.rndm.int.brm.g)
+loo_compare(list(gaussian = loo_g, t4 = loo_t4))
+
+fit.full.rndm.int.brm.g.se <- brms::brm(
+  gcs_mn_lrn_ol | se(gcs_mn_lrn_ol_se, sigma = TRUE) ~
+    factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c +
+    factor(charter):perblk_c + factor(charter):perhsp_c +
+    factor(charter):perasn_c + factor(charter):log_enrl_c +
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  data = seda_an,
+  family = gaussian(),
+  prior = priors_fr_gaussian,
+  chains = 4, cores = parallel::detectCores() - 1,
+  backend = "cmdstanr", iter = 2000, seed = 42
+)
+# saveRDS(
+  # fit.full.rndm.int.brm.g.se, 
+  # "model-objects/fit.full.rndm.int.brm.g.se.RDS"
+  # )
+fit.full.rndm.int.brm.g.se <-readRDS(
+  "model-objects/fit.full.rndm.int.brm.g.se.RDS"
+  )
+
+summary(fit.full.rndm.int.brm.g.se)
+sum(
+  subset(brms::nuts_params(fit.full.rndm.int.brm.g.se), 
+         Parameter == "divergent__")$Value
+  )
+rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.g.se$fit)
+
+pp_check(fit.full.rndm.int.brm.g.se, type = "dens_overlay")
+loo_g_se <- loo(fit.full.rndm.int.brm.g.se)
+plot(loo_g_se, labelpoints = TRUE)
+
+fit.full.rndm.int.brm.t4.se <- brms::brm(
+  gcs_mn_lrn_ol | se(gcs_mn_lrn_ol_se, sigma = TRUE) ~
+    factor(charter) + charter_share_dist_c +
+    perecd_c + lep_c + perblk_c + perhsp_c + perasn_c +
+    log_enrl_c + n_grades_c +
+    sesavgall_c + perecd_dist_c + hsecdnec_c + urbanicity_dist +
+    factor(charter):perecd_c + factor(charter):lep_c +
+    factor(charter):perblk_c + factor(charter):perhsp_c +
+    factor(charter):perasn_c + factor(charter):log_enrl_c +
+    factor(charter):n_grades_c + factor(charter):sesavgall_c +
+    factor(charter):perecd_dist_c +
+    (1 | stateabb) + (0 + factor(charter) | sedalea),
+  data = seda_an,
+  family = student(link = "identity"),
+  prior = my_priors,
+  chains = 4, cores = parallel::detectCores() - 1,
+  backend = "cmdstanr", iter = 2000, seed = 42
+)
+saveRDS(
+  fit.full.rndm.int.brm.t4.se,
+  "model-objects/fit.full.rndm.int.brm.t4.se.RDS"
+  )
+fit.full.rndm.int.brm.t4.se <-readRDS(
+  "model-objects/fit.full.rndm.int.brm.t4.se.RDS"
+  )
+
+summary(fit.full.rndm.int.brm.t4.se)
+sum(
+  subset(brms::nuts_params(fit.full.rndm.int.brm.t4.se), 
+         Parameter == "divergent__")$Value
+  )
+rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.t4.se$fit)
+
+pp_check(fit.full.rndm.int.brm.t4.se, type = "dens_overlay")
+loo_t4_se <- loo(fit.full.rndm.int.brm.t4.se)
+plot(loo_t4_se, labelpoints = TRUE)
+
+loo_compare(
+  list(gaussian = loo_g, t4 = loo_t4, gaussian_se = loo_g_se, t4_se = loo_t4_se)
+  )
+
+```
+
+```{r forest-plot}
+
+# lmer: Wald intervals from the estimates and standard errors
+lmer_df <- as.data.frame(summary(fit.full.rndm.int)$coefficients) |>
+  tibble::rownames_to_column("term") |>
+  transmute(term, model = "lmer (Gaussian)",
+            est = Estimate, lo = Estimate - 1.96 * `Std. Error`,
+            hi = Estimate + 1.96 * `Std. Error`)
+
+# brms: fixef() already returns posterior mean and 95% credible interval
+get_brms <- function(fit, label) {
+  as.data.frame(brms::fixef(fit)) |>
+    tibble::rownames_to_column("term") |>
+    transmute(term, model = label, est = Estimate, lo = Q2.5, hi = Q97.5)
+}
+g_df <-get_brms(fit.full.rndm.int.brm.g, "brms Gaussian")
+t4_df <- get_brms(fit.full.rndm.int.brm, "brms t4")
+
+lmer_df$term <- gsub("factor\\(charter\\)", "factorcharter", lmer_df$term)
+
+g_se_df  <- get_brms(fit.full.rndm.int.brm.g.se,  "brms Gaussian + se")
+t4_se_df <- get_brms(fit.full.rndm.int.brm.t4.se, "brms t4 + se")   # once fitted
+
+all_df <- bind_rows(lmer_df, g_df, t4_df, g_se_df, t4_se_df)
+
+key <- c("factorcharter1", "charter_share_dist_c",
+         "factorcharter1:perecd_c", "factorcharter1:n_grades_c",
+         "factorcharter1:sesavgall_c", "factorcharter1:perecd_dist_c")
+
+model_levels <- c("lmer (Gaussian)", "brms Gaussian", "brms Gaussian + se",
+                  "brms t4", "brms t4 + se")
+
+plot_df <- all_df |>
+  filter(term %in% key) |>
+  mutate(
+    panel = ifelse(grepl(":", term), "Interactions", "Main effects"),
+    model = factor(model, levels = model_levels)
+  )
+
+p_forest <- ggplot(plot_df, aes(x = est, y = term, colour = model)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_pointrange(aes(xmin = lo, xmax = hi),
+                  position = position_dodge(width = 0.8), size = 0.35) +
+  facet_wrap(~ panel, scales = "free", ncol = 1) +
+  scale_colour_okabeito() +
+  labs(x = "Estimate (95% interval)", y = NULL, colour = NULL) +
+  theme_bw()
+p_forest
+ggsave("figs/forest_key_coefs.png", p_forest, width = 8, height = 8, dpi = 300)
+
+# t4 fit: raw residual / sigma
+sig_t4 <- summary(fit.full.rndm.int.brm.t4)$spec_pars["sigma", "Estimate"]
+z_t4 <- residuals(fit.full.rndm.int.brm.t4)[, "Estimate"] / sig_t4
+
+# t4 + se fit: divide by each school's total scale, sqrt(sigma^2 + se_i^2)
+sig_t4se <- summary(fit.full.rndm.int.brm.t4.se)$spec_pars["sigma", "Estimate"]
+z_t4se <- residuals(fit.full.rndm.int.brm.t4.se)[, "Estimate"] /
+  sqrt(sig_t4se^2 + seda_an$gcs_mn_lrn_ol_se^2)
+
+df <- data.frame(
+  z = c(z_t4, z_t4se),
+  model = rep(c("brms t4", "brms t4 + se"), each = length(z_t4))
+)
+
+p_t_qq <- ggplot(df, aes(sample = z)) +
+  stat_qq(distribution = qt, dparams = list(df = 4), size = 0.6, alpha = 0.4) +
+  geom_abline(intercept = 0, slope = 1, colour = "red") +
+  facet_wrap(~ model) +
+  labs(x = "Theoretical t4 quantiles", y = "Standardized residuals") +
+  theme_bw()
+p_t_qq
+
+ggsave("figs/t_quantile_qq.png", p_t_qq, width = 10, height = 5, dpi = 300)
 
 ```

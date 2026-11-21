@@ -5,3 +5,6 @@ data/*.csv
 Thomas_Szymanski_Project2_Proposal.pdf
 codebooks/
 data/seda_an
+
+# large brms fits (>600 MB each; GitHub rejects files >100 MB)
+model-objects/fit.*.RDS
