@@ -11,6 +11,14 @@ Sys.setenv(LANGUAGE = "en")
 
 ```
 
+## Introduction
+
+This document studies how school learning rates in SEDA 6.0 vary across states, districts, and schools, and how that variation differs between charter schools and traditional public schools (TPS). The data are cross-sectional and nested in three levels: schools within geographic districts within states, with Charter/TPS status varying within districts. RQ1 asks how the variance components and the response surface differ by Charter/TPS status, controlling for district and state. RQ2 asks, ecologically, which school and district characteristics are associated with a school being a charter.
+
+## Setup
+
+Loading in packages.
+
 ```{r packages, message = FALSE, warning=FALSE}
 library(lme4)
 library(lmerTest)
@@ -24,6 +32,10 @@ library(scales)
 library(brms)
 
 ```
+
+## Data Processing
+
+Reading in data.
 
 ```{r data, eval = FALSE}
 # read in data
@@ -41,6 +53,8 @@ school_pool_gcs  <- read_csv("data/seda_school_pool_gcs_6.0.csv",
                              col_types = cols(sedasch = chr))
 
 ```
+
+Extracting more granular information from crosswalk data.
 
 ```{r crosswalk-summary, eval = FALSE}
 # The crosswalk is school x year (2009-2019). Collapse it to one row per school
@@ -65,6 +79,8 @@ crosswalk_school <- crosswalk |>
   )
 
 ```
+
+Joining data sets to `seda` master data frame.
 
 ```{r join, eval = FALSE}
 # Analysis file: one row per school with an outcome estimate.
@@ -96,6 +112,8 @@ seda <- school_pool_gcs |>
 
 ```
 
+Validation of `seda` master data frame.
+
 ```{r join-checks, eval = FALSE}
 # Rows should be unchanged by the joins (one row per school)
 stopifnot(nrow(seda) == nrow(school_pool_gcs), !anyDuplicated(seda$sedasch))
@@ -113,6 +131,8 @@ seda |>
 seda |> count(charter, switched_sector)
 
 ```
+
+Refining `seda` data frame to columns relevant to the modeling, resulting in `seda_an` - the analysis sample.
 
 ```{r analysis-sample, eval = FALSE}
 
@@ -179,11 +199,17 @@ seda_an |> count(sector)
 
 ```
 
+For re-runs of the `.Rmd`.
+
 ```{r load-data}
 # write_csv(seda_an, "data/seda_an")
 seda_an <- read_csv("data/seda_an")
 
 ```
+
+## Ecological Analysis
+
+Construction of `ecology.dat` for the first part of the ecological analysis.
 
 ```{r ecological-sample-one, eval = FALSE}
 
@@ -195,6 +221,8 @@ ecology.dat <- seda_an |>
 nrow(ecology.dat)
 
 ```
+
+Calculating the district means of key columns for the ecological analysis. Note that modeling the selection of schools into charter status demands the use of school- and district-level aggregates.
 
 ```{r ecological-dmeans-one, eval = FALSE}
 ecology.dat1 <- ecology.dat |>
@@ -209,6 +237,10 @@ ecology.dat1 <- ecology.dat |>
 
 ```
 
+### Logistic Regression
+
+Fitting a logistic regression predicting charter status from centered columns, with random intercepts for state and geographic district (nested within).
+
 ```{r ecological-fit-one, eval = FALSE}
 ecology.fit1 <- glmmTMB(
   charter ~ perecd_c + perecd_c_dmean + lep_c + lep_c_dmean + perblk_c +
@@ -222,6 +254,8 @@ ecology.fit1 <- glmmTMB(
 
 ```
 
+The sample is the 21,504 schools in 925 districts (39 states) that contain both Charter and TPS schools. Within a district, charters tend to be smaller (log enrollment: -1.70) and to span more grades (+1.15 per grade), and have a lower share of economically disadvantaged students (-6.10) and higher Black (+4.54), Hispanic (+5.62), and Asian (+2.61) shares. The district-mean coefficients are contextual effects: the between-district effect minus the within-district one. Their signs are mostly opposite to the school-level ones, which is the ecological-fallacy pattern. The random-intercept standard deviations are 0.55 (districts) and 0.46 (states) on the logit scale.
+
 ```{r ecological-inspect-one}
 # saveRDS(ecology.fit1, "model-objects/ecology_fit1.rds")
 ecology.fit1 <- readRDS("model-objects/ecology_fit1.rds")
@@ -229,6 +263,8 @@ ecology.fit1 <- readRDS("model-objects/ecology_fit1.rds")
 summary(ecology.fit1)
 
 ```
+
+Preparing data for second ecological analysis model fit.
 
 ```{r ecological-data-prep-two}
 # one row per district: count of charters, plus district-level predictors
@@ -244,6 +280,10 @@ ecology.dat2 <- seda_an |>
 
 ```
 
+### Charter Count Plots
+
+Plotting a histogram of the count of charters by district in the data set: the overwhelming majority of districts in the data do not have charter schools.
+
 ```{r n-charter-hist}
 p_n_charter_hist <- ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
   geom_histogram(binwidth = 1, fill = okabeito_colors(3), color = "white") +
@@ -252,6 +292,8 @@ p_n_charter_hist
 ggsave("figs/n_charter_hist.png", plot = p_n_charter_hist, width = 6, height = 4, dpi = 300)
 
 ```
+
+Reproducing the histogram with a log transform of the y-axis.
 
 ```{r n-charter-hist-log}
 p_n_charter_hist_log <- ggplot(data = ecology.dat2, mapping = aes(x = n_charter)) +
@@ -271,20 +313,9 @@ ggsave("figs/n_charter_hist_log.png", plot = p_n_charter_hist_log, width = 6, he
 
 ```
 
-```{r ecological-data-two-refit, eval = FALSE}
+### Negative Binomial Regression
 
-# one row per district: count of charters, plus district-level predictors
-ecology.dat2 <- seda_an |>
-  summarise(
-    n_charter = sum(charter),
-    n_schools = n(),
-    across(c(perecd_c, lep_c, perblk_c, perhsp_c, perasn_c,
-             log_enrl_c, n_grades_c), mean),           # district means
-    across(c(sesavgall_c, hsecdnec_c, urbanicity_dist), first),  # already district-level
-    .by = c(stateabb, sedalea)
-  )
-
-```
+Fitting a negative binomial regression predicting the count of charter schools on all centered features, with a random intercept for state.
 
 ```{r ecological-fit-two, eval = FALSE}
 ecology.fit2 <-
@@ -299,6 +330,8 @@ ecology.fit2 <-
 
 ```
 
+With the log number of schools as an offset, the model describes the share of a district's schools that are charters. That share is higher where the Black share (+2.11), economic segregation (+2.91), and grade span (+0.60) are higher, and lower where the Asian share (-2.09), enrollment (-0.27), and the rural locale (-1.06) are. The state variance is large (3.31): states differ a great deal in how many charters they have.
+
 ```{r ecological-inspect-two}
 # saveRDS(ecology.fit2, "model-objects/ecology_fit2.rds")
 ecology.fit2 <- readRDS("model-objects/ecology_fit2.rds")
@@ -307,12 +340,20 @@ summary(ecology.fit2)
 
 ```
 
+Confirming that the model is not zero-inflated: the observed number of zeros matches the number simulated from the fitted model (ratio 1.001, p = 0.64).
+
 ```{r ecological-dharma-two}
 simulationOutput <- DHARMa::simulateResiduals(ecology.fit2)
 simulationOutput
 testZeroInflation(simulationOutput = simulationOutput)
 
 ```
+
+## Exploratory Analysis
+
+### Outcome Normality Assessment
+
+Creating a density plot of the learning rate outcome. The outcome appears to follow Student's t-distribution.
 
 ```{r outcome-density, warning=FALSE}
 
@@ -323,11 +364,13 @@ ggsave("figs/outcome_density.png", plot = p_outcome_density, width = 6, height =
 
 ```
 
+Displaying a QQ plot of the outcome. This confirms non-normality: the plot exposes very fat tails in both directions, with the lower tail more extreme (down to about -2.1).
+
 ```{r outcome-qq, warning=FALSE}
 # assessing the outcome with a qqplot
 p_outcome_qq <- ggplot(seda_an, aes(sample = gcs_mn_lrn_ol)) +
   stat_qq() +
-  stat_qq_line(color = okabeito_colors(3), linewidth = 2) +
+  stat_qq_line(color = okabeito_colors(3), linewidth = 1) +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
   theme_bw()
 p_outcome_qq
@@ -335,14 +378,22 @@ ggsave("figs/outcome_qq.png", plot = p_outcome_qq, width = 6, height = 4, dpi = 
 
 ```
 
+### Frequency Table
+
+A frequency table of charters versus public schools in the analysis sample: charters make up \~3k rows, TPS \~51k.
+
 ```{r charter-freq-table, warning=FALSE}
 # frequency table for charter
 table(seda_an$charter)
 
 ```
 
+### Pairs Plot
+
+Extracting data for the pairs plot.
+
 ```{r pairs-data, warning=FALSE}
-# 
+# data for pairs plot
 pairs_dat <- seda_an |>
   filter(!is.na(gcs_mn_lrn_ol), !is.na(charter)) |>
   mutate(
@@ -354,6 +405,8 @@ pairs_dat <- seda_an |>
   slice_sample(n = 3000, by = sector)
 
 ```
+
+Displaying the pairs plot.
 
 ```{r pairs-plot, warning=FALSE}
 p_pairs <- ggpairs(
@@ -371,6 +424,12 @@ ggsave("figs/pairs.png", plot = p_pairs, width = 12, height = 12, dpi = 300)
 
 ```
 
+## Baseline and Random Effects Models
+
+### Model Fits
+
+Fitting an unconditional means model (UCM).
+
 ```{r fit-ucm}
 
 # models
@@ -383,6 +442,8 @@ fit.ucm <- lmerTest::lmer(
 
 ```
 
+Adding a fixed effect for charter status to the UCM.
+
 ```{r fit-charter-fixef}
 fit.charter.fixef <- lmerTest::lmer(
   gcs_mn_lrn_ol~factor(charter) + (1 | stateabb/sedalea), 
@@ -392,6 +453,8 @@ fit.charter.fixef <- lmerTest::lmer(
   )
 
 ```
+
+Adding a Mundlak term - the centered share of charter schools in districts - to the previous fit.
 
 ```{r fit-charter-mundlak}
 fit.charter.mundlak <- lmerTest::lmer(
@@ -405,6 +468,8 @@ fit.charter.mundlak <- lmerTest::lmer(
 
 ```
 
+Adding random effects: a random intercept for state and charter/TPS status-specific district effects.
+
 ```{r fit-charter-rndm}
 fit.charter.rndm <- lmerTest::lmer(
   gcs_mn_lrn_ol ~ factor(charter) + charter_share_dist_c +
@@ -415,6 +480,8 @@ fit.charter.rndm <- lmerTest::lmer(
   )
 
 ```
+
+Fitting a model with the previously added random effects and all predictors.
 
 ```{r fit-full-rndm}
 # .full - with all predictors
@@ -431,25 +498,39 @@ fit.full.rndm <- lmerTest::lmer(
 
 ```
 
+### Model Object Summary Outputs
+
+Examining summary outputs off all the baseline model objects.
+
+The UCM documents how the variation splits between and within the grouping factors. Taking the ICC as the proportion of total variance at a level, about 6.9% of the variance in learning rates is between states (0.0037), 12.7% is between districts within states (0.0068), and 80.4% is within districts, at the school level (0.0431). School-level predictors might explain some of that 80%; district- and state-level predictors might explain some of the rest.
+
 ```{r summary-ucm}
 summary(fit.ucm)
 
 ```
+
+Charters score higher than TPS by 0.076 GCS (SE 0.004), controlling for the differences between districts and states.
 
 ```{r summary-charter-fixef}
 summary(fit.charter.fixef)
 
 ```
 
+With the Mundlak term, the within-district charter gap rises to 0.085, and the district charter share is -0.115 (t = -7.4). Districts with more charters have lower learning rates, and the Charter/TPS coefficient is now the contrast net of that district-level difference.
+
 ```{r summary-charter-mundlak}
 summary(fit.charter.mundlak)
 
 ```
 
+With district effects specific to Charter/TPS status, charter schools vary less across districts (variance 0.0055) than TPS do (0.0072). The two district effects are correlated at 0.51: a district that is high for TPS tends to be high for charters too.
+
 ```{r summary-charter-rndm}
 summary(fit.charter.rndm)
 
 ```
+
+In the full model, the charter gap shrinks to 0.043, the Mundlak term to -0.035 (p = 0.022), and the district correlation to 0.29. The economically disadvantaged share is the largest school-level predictor (-0.223 per unit share). The Asian (+0.243), LEP (+0.071), and Hispanic (+0.060) shares are positive, and enrollment (-0.029) is negative. The Black share (p = 0.058), district economic disadvantage, economic segregation, and the rural and suburban locale terms are not distinguishable from zero.
 
 ```{r summary-full-rndm}
 summary(fit.full.rndm)
@@ -462,6 +543,10 @@ coefs
 
 ```
 
+### Likelihood-Ratio Tests
+
+A likelihood-ratio test on the model with the Mundlak term versus the same model with random effects added: since the models do not differ in fixed effects, we do not refit (i.e., we stay in REML). The random effects counterpart is preferred under the LRT (chi-square = 147.6 on 2 df, p \< 0.0001), and AIC falls from -12,120 to -12,263. A boundary-corrected p-value would be even smaller, so the conclusion does not change.
+
 ```{r lrt-mundlak-vs-rndm}
 
 # use an LRT on REML fits (refit = FALSE) since only the rndm part changes
@@ -469,11 +554,15 @@ anova(fit.charter.mundlak, fit.charter.rndm, refit = FALSE)
 
 ```
 
+Another LRT, comparing the random effects models differing in predictors: since the fixed effects are not the same, we refit the models with ML. The LRT supports the choice of the "full" model with all the (centered) predictors added: they are jointly warranted (chi-square = 2732 on 13 df, p \< 0.0001). Both models use the same 54,074 schools, so the likelihoods are comparable.
+
 ```{r lrt-rndm-vs-full}
 # use an LRT on ML fits (refit = TRUE) since the fixed effects differ
 anova(fit.charter.rndm, fit.full.rndm, refit = TRUE)
 
 ```
+
+Creating ML-refit model objects of all the models to prepare for gathering AIC/BIC values.
 
 ```{r ml-refits}
 # ML refits, used only for the AIC/BIC comparisons (fixed effects differ);
@@ -485,6 +574,14 @@ fit.charter.rndm.ml <- update(object = fit.charter.rndm, REML = FALSE)
 fit.full.rndm.ml <- update(object = fit.full.rndm, REML = FALSE)
 
 ```
+
+### Information Criteria
+
+Comparing the AIC and BIC values of all the refit model objects. Both are fit by ML, since the fixed effects differ, and all five models use the same observations. AIC and BIC both fall steadily from the UCM to the full random effects model, and the full model is the best on both. Differences of about 2 BIC points are weak evidence, and these gaps run from hundreds to thousands of points, so the two criteria agree and there is no tension to resolve.
+
+#### AIC Comparison
+
+Comparing the AIC values of all the refit model objects. AIC runs from -11,766 (UCM) to -14,992, and the model with the best AIC is the "full" random effects model.
 
 ```{r aic-comparison}
 # comparing all AICs
@@ -499,6 +596,28 @@ bestAIC <- rownames(aics1)[which.min(aics1$AIC)]
 cat("Best AIC model is # ",bestAIC,"\n")
 
 ```
+
+#### BIC Comparison
+
+Comparing the BIC values of all the refit model objects. BIC runs from -11,730 (UCM) to -14,805, and the model with the best BIC is also the "full" random effects model.
+
+```{r bic-comparison}
+# Using the BIC, select the "best" model of the five ML fits
+bics1 <- BIC(
+  fit.ucm.ml,
+  fit.charter.fixef.ml,fit.charter.mundlak.ml,
+  fit.charter.rndm.ml, fit.full.rndm.ml
+  )
+bics1
+bestBIC <- rownames(bics1)[which.min(bics1$BIC)]
+
+cat("Best BIC model is # ",bestBIC,"\n")
+
+```
+
+### Variance Components
+
+Extracting the variance components from each of the original model objects.
 
 ```{r variance-components}
 # examining the variance components, extract epsilon variance
@@ -520,38 +639,41 @@ sig2state.full.rndm <- VarCorr(fit.full.rndm)$stateabb[1, 1]
 
 ```
 
+### Pseudo-R\^2 Calculations
+
+Computing pseudo-R\^2 values: the proportional reduction in each variance component from `fit.charter.rndm` to `fit.full.rndm`. The residual (within) value is R\^2_W; the district- and state-level values are R\^2_B for their level.
+
+| Component         | Pseudo-R\^2 |
+|-------------------|-------------|
+| Residual (within) | 0.031       |
+| TPS district      | 0.335       |
+| State             | 0.173       |
+| Charter district  | -0.425      |
+
+Within-district (school-level) variance falls by only about 3%, so the predictors mostly explain the between-level components. The negative value for the charter district variance means that variance increased once the predictors were added: this kind of re-shuffling is common once the mean is better specified, and it should be read alongside the change in the district correlation.
+
 ```{r pseudo-r2}
-# computing pseudo-R^2 within, fit.charter.rndm vs. fit.full.rndm
-# pseudo-R^2 calc, epsilon variance
+# pseudo-R^2 for each variance component, fit.charter.rndm vs. fit.full.rndm
+# R^2_W: residual (within) variance
 pRSq.eps <- (sig2eps.charter.rndm-sig2eps.full.rndm)/(sig2eps.charter.rndm)
-cat("pseudo-R2-within is ",pRSq.eps,"\n")
-# pseudo-R^2 calc, tps variance
+cat("pseudo-R2 (residual, within) is ",pRSq.eps,"\n")
+# R^2_B: TPS district variance
 pRSq.tps <- (sig2tps.charter.rndm-sig2tps.full.rndm)/(sig2tps.charter.rndm)
-cat("pseudo-R2-within is ",pRSq.tps,"\n")
-# pseudo-R^2 calc, charter variance
-pRSq.charter <- 
+cat("pseudo-R2 (TPS district, between) is ",pRSq.tps,"\n")
+# R^2_B: charter district variance
+pRSq.charter <-
   (sig2charter.charter.rndm-sig2charter.full.rndm)/(sig2charter.charter.rndm)
-cat("pseudo-R2-within is ",pRSq.charter,"\n")
-# pseudo-R^2 calc, state variance
-pRSq.state <- 
+cat("pseudo-R2 (charter district, between) is ",pRSq.charter,"\n")
+# R^2_B: state variance
+pRSq.state <-
   (sig2state.charter.rndm-sig2state.full.rndm)/(sig2state.charter.rndm)
-cat("pseudo-R2-within is ",pRSq.state,"\n")
+cat("pseudo-R2 (state, between) is ",pRSq.state,"\n")
 
 ```
 
-```{r bic-comparison}
-# Using the BIC, select the "best" model of the five ML fits
-bics1 <- BIC(
-  fit.ucm.ml,
-  fit.charter.fixef.ml,fit.charter.mundlak.ml,
-  fit.charter.rndm.ml, fit.full.rndm.ml
-  )
-bics1
-bestBIC <- rownames(bics1)[which.min(bics1$BIC)]
+### Residual Analysis
 
-cat("Best BIC model is # ",bestBIC,"\n")
-
-```
+Retrieving residuals, district- and state- BLUPS.
 
 ```{r resid-extract}
 
@@ -578,6 +700,10 @@ eta_charter <- blups_dist[rownames(blups_dist) %in% dist_with(1), "factor(charte
 
 ```
 
+### BLUP Normality Assessment
+
+Defining a function to help assess the normality assumption for the BLUPs.
+
 ```{r resid-dqplot-helper}
 # Examine all residuals for normality (density and q-q plots)
 dqplot <- function(x, label) {
@@ -587,6 +713,8 @@ dqplot <- function(x, label) {
 }
 
 ```
+
+Residual plots all point towards substantial deviations from normality. The school residuals have heavy tails, with the lower tail more extreme (scaled residuals range from -15.1 to 8.0), and the BLUPs fail the normality check as well: the TPS district BLUPs, for example, show a sharp central peak and an S-shaped QQ plot, which means heavy tails. This does not mean the model is wrong, but it should be noted and followed up.
 
 ```{r resid-plots}
 par(mfrow = c(1, 2))
@@ -609,6 +737,12 @@ save_base_plot("figs/resid_l3_state.png")
 
 ```
 
+## Interaction
+
+### Model Fit
+
+The interaction model lets the response surface differ by Charter/TPS status, so each slope can have its own return in charter schools. Fitting a "full" model with interactions between Charter/TPS status and the school composition predictors (economically disadvantaged, LEP, Black, Hispanic, and Asian shares, enrollment, grade span), district SES, and district economic disadvantage. The charter share, economic segregation, and locale terms are not interacted.
+
 ```{r interaction-model-fit}
 
 fit.full.rndm.int <- lmerTest::lmer(
@@ -629,10 +763,18 @@ fit.full.rndm.int <- lmerTest::lmer(
 
 ```
 
+### Summary Output
+
+Inspecting the summary output. Three interactions are distinguishable from zero. For economic disadvantage, the slope is -0.233 for TPS and about -0.118 for charters (interaction +0.115, p \< 0.001): poverty is associated with lower learning rates in both, about half as steeply in charters. For grade span, the slope is +0.010 for TPS and about zero for charters (-0.011, p = 0.002). For district SES, the slope is +0.018 for TPS and -0.012 for charters (-0.029, p = 0.003). The other interactions are not significant. The Charter/TPS gap at the centered means falls to +0.055; the charter district variance drops (0.0078 to 0.0053), and the residual variance is unchanged (0.0411).
+
 ```{r interaction-model-summary}
 summary(fit.full.rndm.int)
 
 ```
+
+### Wald Test
+
+Leveraging a Wald test to test for the joint significance of the interaction terms. The Wald test confirms that the interaction terms are jointly significant (chi-square = 130.2 on 9 df, p \< 0.0001). A Wald test uses the estimated covariance matrix of the parameter estimates, so it is not an LRT. Terms 17 to 25 are the nine interactions: `urbanicity_dist` contributes three dummy columns, so the model has 25 coefficients.
 
 ```{r interaction-wald-test}
 wt <- aod::wald.test(
@@ -644,6 +786,18 @@ wt$result
 wt.p_val <- unname(wt$result$chi2["P"])
 
 ```
+
+### Interaction vs. No Interaction LRT
+
+Another LRT, comparing the full random effects models with and without interaction terms: since the fixed effects are not the same, we refit the models with ML. The LRT supports the choice of the "full" model with the interaction terms added (chi-square = 121.6 on 9 df, p \< 0.0001). AIC falls from -14,992 to -15,096, and BIC also falls (-14,805 to -14,829), so both criteria favor the interaction model.
+
+```{r lrt-noint-int}
+# use an LRT on ML fits (refit = TRUE) since the fixed effects differ
+anova(fit.full.rndm, fit.full.rndm.int, refit = TRUE)
+
+```
+
+### Residual Analysis
 
 ```{r int-resid-extract}
 # Compute the BLUPs for this fitted model
@@ -670,15 +824,9 @@ eta_charter.int <- blups_dist.int[rownames(blups_dist.int) %in% dist_with(1), "f
 
 ```
 
-```{r int-resid-dqplot-helper}
-# Examine all residuals for normality (density and q-q plots)
-dqplot <- function(x, label) {
-  plot(density(x), main = label)
-  qqnorm(x, main = label)
-  qqline(x)
-}
+### BLUP Normality Assessment
 
-```
+BLUPs continue to display non-normal appearances.
 
 ```{r int-resid-plots}
 par(mfrow = c(1, 2))
@@ -694,6 +842,8 @@ save_base_plot("figs/resid_int_l3_state.png")
 
 ```
 
+Plotting standard error values reported for the learning rate outcome variable on the residuals, exposing extreme residuals and their placement relative to the reported standard errors. The residuals form a roughly symmetric column, and the extreme residuals appear at every standard error from about 0.05 to 0.14. The most extreme, at -3.07, is about 15 residual standard deviations from zero (the residual standard deviation is 0.203).
+
 ```{r se-vs-resid-plot}
 
 sp_dat <- data.frame(eps.int = eps.int, 
@@ -707,21 +857,27 @@ ggsave("figs/se_vs_resid.png", plot = p_se_vs_resid, width = 6, height = 4, dpi 
 
 ```
 
+Printing the 30 most extreme residuals in each direction.
+
 ```{r int-resid-extremes}
 head(sort(eps.int), n = 30)
 tail(sort(eps.int), n = 30)
 
 ```
 
+Retrieving the extreme residual entries through indexing and constructing a data frame. The extreme residuals are those with an absolute value greater than 1, about 5 residual standard deviations: 40 schools, 21 negative and 19 positive. Of these, 39 are TPS and 1 is a charter.
+
 ```{r int-resid-outliers}
-eps.outliers <- c(sort(eps.int)[1:21], tail(sort(eps.int), n = 19))
-eps.outliers.idxs <- which(
-  eps.int %in% eps.outliers
-  )
+# extreme residuals: absolute value greater than 1 GCS unit
+eps.outliers.idxs <- which(abs(eps.int) > 1)
 eps.outlier.dat <- seda_an[eps.outliers.idxs, ]
 eps.outlier.dat |> count(charter)
 
 ```
+
+### Reported Outcome SEs and Outliers
+
+Plotting a histogram of the reported standard errors for the learning rate outcome variable for the entire analysis sample. The reported standard errors range from about 0.02 to 0.15 and are right-skewed, which is why the extension below treats them as information about measurement error.
 
 ```{r hist-se-all}
 hist(x = seda_an$gcs_mn_lrn_ol_se)
@@ -729,11 +885,21 @@ save_base_plot("figs/hist_se_all.png")
 
 ```
 
+Plotting an analogous histogram of the reported standard errors for the learning rate outcome variable, but for the extreme residuals. On average, they are more concentrated in higher standard error values, but likewise extend into the 0.04 to 0.08 range typical for the majority of the data.
+
 ```{r hist-se-outliers}
 hist(x = eps.outlier.dat$gcs_mn_lrn_ol_se)
 save_base_plot("figs/hist_se_outliers.png")
 
 ```
+
+## Robustness Extension: t4 Error Structure, Weighting, Combined
+
+The Gaussian error model is easily surprised, because its thin tails put very little probability on extreme observations. Many natural phenomena have thicker tails, with rare, extreme observations that are not measurement errors but real events. A robust regression reduces the influence of such observations by replacing the Gaussian with a Student-t distribution. We do not usually try to estimate the degrees of freedom: instead we assume they are small (here, 4) in order to reduce the influence of outliers. We also pass each school's reported standard error to the model, so that the model knows how precisely each learning rate was measured.
+
+### Default Priors
+
+Retrieving the default priors given the model formula. The defaults are flat on the fixed effects, and `nu` has a gamma(2, 0.1) prior; both are replaced below.
 
 ```{r brms-get-prior}
 
@@ -754,6 +920,10 @@ prior_get <- get_prior(
 prior_get
 
 ```
+
+### Setting Priors
+
+Setting priors, fixing degrees of freedom to 4 as the first step to force a fixed t4 error structure. The other priors are mildly skeptical, regularizing priors: normal(0, 0.5) on the slopes and the tighter normal(0, 0.25) on the interactions. A regularizing prior reduces overfitting, but one that is too skeptical prevents the model from learning from the data. The LKJ(1) prior on the correlation between the district effects is flat over valid correlation matrices.
 
 ```{r brms-priors-t4}
 my_priors <- c(
@@ -781,6 +951,10 @@ my_priors <- c(
 
 ```
 
+### Prior Validation
+
+Validating the priors. Setting family to student(link = "identity"): the other component needed to force the fixed t4 error structure.
+
 ```{r brms-validate-prior}
 validate_prior(
   prior = my_priors, 
@@ -797,6 +971,10 @@ validate_prior(
   family = student(link = "identity"))
 
 ```
+
+### Preliminary BRMS Fit
+
+Fitting the model to the priors only (`sample_prior = "only"`), so that we can see what the priors imply about the outcome before the data are used.
 
 ```{r brms-fit-prior-only, eval = FALSE}
 fit.prior.only <- brms::brm(
@@ -824,6 +1002,10 @@ fit.prior.only <- brms::brm(
 
 ```
 
+### Preliminary Fit Output
+
+Reading in the prior-only fit and inspecting the summary. The parameter summaries simply reproduce the priors (for example, the standard deviations average about 0.33, the mean of an exponential(3)), as they should when the data are not used.
+
 ```{r brms-load-prior-only}
 # saveRDS(fit.prior.only, "model-objects/fit.prior.only.RDS")
 fit.prior.only <- readRDS("model-objects/fit.prior.only.RDS")
@@ -831,6 +1013,8 @@ fit.prior.only <- readRDS("model-objects/fit.prior.only.RDS")
 summary(fit.prior.only)
 
 ```
+
+A prior predictive simulation shows what the priors imply about observable outcomes, which helps diagnose bad choices. Comparing quantiles of the simulated and observed outcomes: the simulated outcomes span -4.8 to 6.9 (0.1% to 99.9%), against 0.18 to 1.92 observed.
 
 ```{r prior-predictive-quantiles}
 yrep <- posterior_predict(fit.prior.only)
@@ -841,6 +1025,8 @@ quantile(seda_an$gcs_mn_lrn_ol, c(.001, .01, .05, .25, .5, .75, .95, .99, .999))
 
 ```
 
+Only 59% of the simulated outcomes fall between 0 and 2 GCS, against 99.9% of the observed ones. The priors are wider than the data. With 54,074 schools the likelihood dominates, so these wide priors are harmless here, but they are not tight.
+
 ```{r prior-predictive-share}
 # share of simulated and observed outcomes between 0 and 2 GCS
 mean(yrep > 0 & yrep < 2)
@@ -848,10 +1034,16 @@ mean(seda_an$gcs_mn_lrn_ol > 0 & seda_an$gcs_mn_lrn_ol < 2)
 
 ```
 
+The prior predictive density, with the observed outcome overlaid for comparison.
+
 ```{r prior-pp-check}
 pp_check(fit.prior.only) + coord_cartesian(xlim = c(-3, 5))
 
 ```
+
+### Gaussian BRMS Fit
+
+Setting the same priors for the Gaussian fit, minus the fixed degrees of freedom. This is the Bayesian counterpart of the `lmer` interaction model, and the baseline for the robust fits below.
 
 ```{r brms-priors-gaussian}
 priors_fr_gaussian <- c(
@@ -904,6 +1096,8 @@ fit.full.rndm.int.brm.g <- brms::brm(
 
 ```
 
+Reading in the Gaussian fit and inspecting the summary. The estimates are close to the `lmer` ones, and `Rhat` is 1.00 to 1.01 for every parameter. The residual standard deviation is 0.20.
+
 ```{r brms-load-gaussian}
 # saveRDS(fit.full.rndm.int.brm.g, "model-objects/fit.full.rndm.int.brm.g.RDS")
 fit.full.rndm.int.brm.g <- readRDS("model-objects/fit.full.rndm.int.brm.g.RDS")
@@ -911,6 +1105,10 @@ fit.full.rndm.int.brm.g <- readRDS("model-objects/fit.full.rndm.int.brm.g.RDS")
 summary(fit.full.rndm.int.brm.g)
 
 ```
+
+### Coerced t4 Error Structure BRMS Fit
+
+Fitting the same model with Student-t errors and the degrees of freedom fixed at 4.
 
 ```{r brms-fit-t4, eval = FALSE}
 # t4 model fit
@@ -939,6 +1137,8 @@ fit.full.rndm.int.brm.t4 <- brms::brm(
 
 ```
 
+Reading in the t4 fit and inspecting the summary. The fixed effects are close to the Gaussian ones, but the residual scale is much smaller (0.15 against 0.20), because the thick tails absorb the extreme observations. The district and state standard deviations are unchanged (about 0.07 and 0.06). The charter share coefficient moves from -0.03 to -0.02, and its interval now includes zero; the economic disadvantage interaction falls from 0.11 to 0.08.
+
 ```{r brms-load-t4}
 # saveRDS(fit.full.rndm.int.brm.t4, "model-objects/fit.full.rndm.int.brm.t4.RDS")
 fit.full.rndm.int.brm.t4 <-readRDS(
@@ -949,6 +1149,8 @@ summary(fit.full.rndm.int.brm.t4)
 
 ```
 
+Checking the sampler. There are no divergent transitions, and `Rhat` is 1.00 to 1.01 with effective sample sizes in the hundreds to thousands. `Rhat` is a signal of danger, never of safety, so it is read alongside the divergence, tree depth, and energy checks.
+
 ```{r t4-hmc-diagnostics}
 # Extract NUTS diagnostics (divergences, treedepth, energy, etc.)
 np <- brms::nuts_params(fit.full.rndm.int.brm.t4)
@@ -956,10 +1158,12 @@ np <- brms::nuts_params(fit.full.rndm.int.brm.t4)
 # Count total divergences
 sum(subset(np, Parameter == "divergent__")$Value)
 
-# treedepth and energy
-rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.t4)
+# treedepth and energy (the cmdstanr fit stores the stanfit in $fit)
+rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.t4$fit)
 
 ```
+
+Posterior predictive check and LOO diagnostics. PSIS-LOO gives one Pareto k per observation, and large k values flag influential observations. The t4 fit has no observation with k above 0.7 (the maximum is about 0.59), whereas the Gaussian fit has 4. The relative influence of the extreme schools has been much reduced.
 
 ```{r t4-ppc-loo}
 # posterior predictive checks & LOO outlier diagnosis
@@ -969,11 +1173,17 @@ plot(loo_t4, labelpoints = TRUE)
 
 ```
 
+Comparing the Gaussian and t4 fits with PSIS-LOO. The t4 fit is preferred: the Gaussian fit's expected log predictive density is 1246 lower, about 7 standard errors of the difference (181.6).
+
 ```{r loo-compare-g-t4}
 loo_g <- loo(fit.full.rndm.int.brm.g)
 loo_compare(list(gaussian = loo_g, t4 = loo_t4))
 
 ```
+
+### Gaussian BRMS Fit, Weighted by Reported Outcome SEs
+
+Adding each school's reported standard error through `se(..., sigma = TRUE)`: the model's residual scale is then combined with each school's own reported measurement error, so noisier schools count for less.
 
 ```{r brms-fit-gaussian-se, eval = FALSE}
 fit.full.rndm.int.brm.g.se <- brms::brm(
@@ -997,6 +1207,8 @@ fit.full.rndm.int.brm.g.se <- brms::brm(
 
 ```
 
+Reading in the weighted Gaussian fit.
+
 ```{r brms-load-gaussian-se}
 # saveRDS(
   # fit.full.rndm.int.brm.g.se, 
@@ -1008,6 +1220,8 @@ fit.full.rndm.int.brm.g.se <-readRDS(
 
 ```
 
+Summary and sampler diagnostics for the weighted Gaussian fit: no divergent transitions, no saturated tree depth, no energy problems, and `Rhat` of 1.00 to 1.01. The residual scale is 0.19.
+
 ```{r gaussian-se-diagnostics}
 summary(fit.full.rndm.int.brm.g.se)
 sum(
@@ -1018,12 +1232,18 @@ rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.g.se$fit)
 
 ```
 
+Posterior predictive check and LOO diagnostics. Four observations still have a Pareto k above 0.7 under the Gaussian error structure, even with the reported standard errors.
+
 ```{r gaussian-se-ppc-loo}
 pp_check(fit.full.rndm.int.brm.g.se, type = "dens_overlay")
 loo_g_se <- loo(fit.full.rndm.int.brm.g.se)
 plot(loo_g_se, labelpoints = TRUE)
 
 ```
+
+### Coerced t4 Error Structure BRMS Fit, Weighted by Reported Outcome SEs
+
+Combining the two extensions: t4 errors with the degrees of freedom fixed at 4, and each school's reported standard error.
 
 ```{r brms-fit-t4-se, eval = FALSE}
 fit.full.rndm.int.brm.t4.se <- brms::brm(
@@ -1047,6 +1267,8 @@ fit.full.rndm.int.brm.t4.se <- brms::brm(
 
 ```
 
+Reading in the combined fit.
+
 ```{r brms-load-t4-se}
 # saveRDS(
 #   fit.full.rndm.int.brm.t4.se,
@@ -1058,6 +1280,8 @@ fit.full.rndm.int.brm.t4.se <-readRDS(
 
 ```
 
+Summary and sampler diagnostics for the combined fit: no divergent transitions, no saturated tree depth, no energy problems, and `Rhat` of 1.00 to 1.01. The residual scale is the smallest of the four fits (0.14).
+
 ```{r t4-se-diagnostics}
 summary(fit.full.rndm.int.brm.t4.se)
 sum(
@@ -1068,6 +1292,8 @@ rstan::check_hmc_diagnostics(fit.full.rndm.int.brm.t4.se$fit)
 
 ```
 
+Posterior predictive check and LOO diagnostics for the combined fit.
+
 ```{r t4-se-ppc-loo}
 pp_check(fit.full.rndm.int.brm.t4.se, type = "dens_overlay")
 loo_t4_se <- loo(fit.full.rndm.int.brm.t4.se)
@@ -1075,12 +1301,41 @@ plot(loo_t4_se, labelpoints = TRUE)
 
 ```
 
+### BRMS Model Objects Comparison
+
+Comparing all four fits with PSIS-LOO. All four use the same 54,074 observations and the same outcome, so the expected log predictive densities are comparable (`loo_compare` warns about the outcome hash because the `se()` models store the response differently, but the values are identical).
+
+| Model         | ELPD difference from best | SE of difference |
+|---------------|---------------------------|------------------|
+| t4 + se       | 0                         |                  |
+| t4            | -739                      | 19               |
+| Gaussian + se | -1066                     | 165              |
+| Gaussian      | -1985                     | 186              |
+
+The t4 error structure is preferred, and adding the reported standard errors improves it further. Within the Gaussian family, adding the standard errors helps by about 900 points, which is large relative to its standard error.
+
 ```{r loo-compare-all}
 loo_compare(
   list(gaussian = loo_g, t4 = loo_t4, gaussian_se = loo_g_se, t4_se = loo_t4_se)
   )
 
 ```
+
+Repeating the comparison with WAIC. It gives the same ranking, but it warns that the penalty term is above 0.4 for about 1.5% of observations in some of the fits, so LOO is preferred.
+
+```{r loo-compare-waic}
+
+waic_g <- waic(fit.full.rndm.int.brm.g)
+waic_t4 <- waic(fit.full.rndm.int.brm.t4)
+waic_g_se <- waic(fit.full.rndm.int.brm.g.se)
+waic_t4_se <- waic(fit.full.rndm.int.brm.t4.se)
+loo_compare(waic_g, waic_t4, waic_g_se, waic_t4_se)
+
+```
+
+### Coefficient Comparison
+
+Comparing the key coefficients across all five fits (the `lmer` fit and the four brms fits) with a forest plot. First, collecting the `lmer` estimates with Wald intervals.
 
 ```{r forest-lmer-df}
 
@@ -1092,6 +1347,8 @@ lmer_df <- as.data.frame(summary(fit.full.rndm.int)$coefficients) |>
             hi = Estimate + 1.96 * `Std. Error`)
 
 ```
+
+Collecting the brms estimates for the unweighted fits, as posterior means with 95% credible intervals.
 
 ```{r forest-brms-df}
 # brms: fixef() already returns posterior mean and 95% credible interval
@@ -1105,16 +1362,22 @@ t4_df <- get_brms(fit.full.rndm.int.brm.t4, "brms t4")
 
 ```
 
+Renaming the `lmer` terms so that they match the brms names.
+
 ```{r forest-term-rename}
 lmer_df$term <- gsub("factor\\(charter\\)", "factorcharter", lmer_df$term)
 
 ```
 
+Collecting the brms estimates for the weighted fits.
+
 ```{r forest-se-df}
 g_se_df  <- get_brms(fit.full.rndm.int.brm.g.se,  "brms Gaussian + se")
-t4_se_df <- get_brms(fit.full.rndm.int.brm.t4.se, "brms t4 + se")   # once fitted
+t4_se_df <- get_brms(fit.full.rndm.int.brm.t4.se, "brms t4 + se")
 
 ```
+
+Combining the estimates, and keeping the main effects and interactions of most interest.
 
 ```{r forest-combine}
 all_df <- bind_rows(lmer_df, g_df, t4_df, g_se_df, t4_se_df)
@@ -1135,6 +1398,8 @@ plot_df <- all_df |>
 
 ```
 
+Plotting the forest plot. The key coefficients keep their signs across all five fits. The charter gap is between +0.04 and +0.055 with every interval excluding zero. The economic disadvantage interaction is positive in every fit (0.08 to 0.115), and the district economic disadvantage interaction includes zero in all of them. The grade span interaction is negative in every fit (-0.006 to -0.011), but its interval excludes zero only under the `lmer` and the two Gaussian fits, and includes zero under both t4 fits. The district SES interaction is negative in every fit and its interval excludes zero in all five (the t4 upper bounds are close to zero, at about -0.003). The exception is the Mundlak term (the district charter share): its intervals exclude zero under the `lmer` and the two Gaussian fits but include zero under both t4 fits, so that finding is not robust to the tail behavior of the errors.
+
 ```{r forest-plot}
 p_forest <- ggplot(plot_df, aes(x = est, y = term, colour = model)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
@@ -1149,6 +1414,48 @@ ggsave("figs/forest_key_coefs.png", p_forest, width = 8, height = 8, dpi = 300)
 
 ```
 
+### Coefficient Comparison: lmer vs. t4 + se
+
+Comparing just the `lmer` (Gaussian) fit with the t4 + se fit on the key main effects and the three interactions that are distinguishable from zero under `lmer`. In the interaction model, the economic disadvantage, grade span, and district SES coefficients are the TPS slopes, and the charter coefficient is the gap at the centered means. The two fits agree in sign for every term. The charter gap, the three TPS slopes, and the economic disadvantage and district SES interactions are distinguishable from zero under both fits. The district charter share and the charter by grade span interaction are distinguishable from zero under `lmer` but not under t4 + se.
+
+```{r forest-plot-two, fig.width=7, fig.height=5}
+key_two <- c(factorcharter1 = "Charter gap",
+             charter_share_dist_c = "District charter share (Mundlak)",
+             perecd_c = "Econ. disadvantaged (TPS slope)",
+             n_grades_c = "Grades served (TPS slope)",
+             sesavgall_c = "District SES (TPS slope)",
+             `factorcharter1:perecd_c` = "Charter x econ. disadvantaged",
+             `factorcharter1:n_grades_c` = "Charter x grades served",
+             `factorcharter1:sesavgall_c` = "Charter x district SES")
+
+two_fits <- bind_rows(lmer_df, t4_se_df) |>
+  filter(term %in% names(key_two)) |>
+  mutate(
+    panel = factor(ifelse(grepl(":", term), "Interactions", "Main effects"),
+                   levels = c("Main effects", "Interactions")),
+    term  = factor(key_two[term], levels = rev(key_two)),
+    model = factor(model, levels = c("lmer (Gaussian)", "brms t4 + se"))
+  )
+
+p_forest_two <- ggplot(two_fits, aes(x = est, y = term, colour = model)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_pointrange(aes(xmin = lo, xmax = hi),
+                  position = position_dodge(width = 0.6), size = 0.35) +
+  facet_wrap(~ panel, scales = "free", ncol = 1) +
+  # okabeito_colors() selects by position: 1 = orange, 5 = blue (as in scale_colour_okabeito)
+  scale_colour_manual(values = unname(okabeito_colors(c(1, 5)))) +
+  labs(x = "Estimate (95% interval)", y = NULL, colour = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+p_forest_two
+ggsave("figs/forest_two_fits.png", p_forest_two, width = 8, height = 6, dpi = 300)
+
+```
+
+### Checking the t4 Assumption
+
+Standardizing the residuals of the two t4 fits, so that they can be compared with the theoretical t4 quantiles. The raw residuals are divided by the fitted scale; in the weighted fit they are divided by each school's total scale, the square root of the squared scale plus the squared reported standard error.
+
 ```{r t4-std-resid}
 # t4 fit: raw residual / sigma
 sig_t4 <- summary(fit.full.rndm.int.brm.t4)$spec_pars["sigma", "Estimate"]
@@ -1160,6 +1467,8 @@ z_t4se <- residuals(fit.full.rndm.int.brm.t4.se)[, "Estimate"] /
   sqrt(sig_t4se^2 + seda_an$gcs_mn_lrn_ol_se^2)
 
 ```
+
+A QQ plot of the standardized residuals against t4 quantiles. The residuals follow the line through the bulk of the distribution. In the extreme tails they fall inside the line, so t4 is slightly conservative there, and the lower tail is still more extreme than the upper.
 
 ```{r t-qq-plot}
 df <- data.frame(
@@ -1178,3 +1487,19 @@ p_t_qq
 ggsave("figs/t_quantile_qq.png", p_t_qq, width = 10, height = 5, dpi = 300)
 
 ```
+
+## Summary of Findings
+
+**Variance partition (RQ1a).** About 80% of the variance in learning rates is within districts (the school level), 13% is between districts, and 7% is between states. In the baseline random effects model, charter schools vary less across districts than TPS do, and the two district effects are positively correlated (0.51 in the baseline model, 0.29 in the full model).
+
+**Response surface (RQ1b).** The within-district Charter/TPS gap shrinks from +0.085 to +0.043 once school and district composition are controlled, and the interaction model puts it at +0.055 at the centered means. The effects of the predictors are not homogeneous across Charter/TPS status: the joint Wald test on the nine interaction terms rejects equal slopes (chi-square = 130 on 9 df, p \< 0.0001), and three of the nine interactions are distinguishable from zero. In each case the slope for charter schools is the TPS slope plus the interaction term, net of the other predictors and of the district- and state-level random effects.
+
+- **Economic disadvantage.** The slope is -0.233 for TPS and -0.233 + 0.115 = -0.118 for charters (interaction SE 0.027, p \< 0.001). A 10-percentage-point higher share of economically disadvantaged students is associated with a learning rate 0.023 GCS lower in TPS and 0.012 GCS lower in charters. Poverty is associated with lower learning rates in both, about half as steeply in charters.
+- **Grade span.** The slope is +0.010 per additional grade for TPS and +0.010 - 0.011 = about zero for charters (interaction SE 0.004, p = 0.002). A broader grade span is associated with a higher learning rate in TPS, but not in charters.
+- **District SES.** The slope is +0.018 for TPS and +0.018 - 0.029 = -0.012 for charters (interaction SE 0.010, p = 0.003). The two slopes have opposite signs: a higher-SES district is associated with higher learning rates in its TPS, but not in its charters (the charter slope itself was not tested separately).
+
+The other six interactions (the LEP, Black, Hispanic, and Asian shares, enrollment, and district economic disadvantage) are not distinguishable from zero. The signs of the three interactions above are the same in all five fits (`lmer` and the four `brms` fits): the economic disadvantage interaction is positive (0.08 to 0.115), and the grade span and district SES interactions are negative. The economic disadvantage and district SES interactions are distinguishable from zero in all five fits, but the grade span interaction is not under the two t4 fits (-0.006, with an interval that includes zero).
+
+**Signal vs. noise (RQ1c).** The Gaussian error model fits poorly, with heavy tails in the outcome and in every set of residuals. A t4 error structure that also uses each school's reported standard error is clearly preferred under LOO-CV, and the signs of the main Charter/TPS and interaction findings hold under it. The charter gap and the economic disadvantage and district SES interactions remain distinguishable from zero under t4 + se, but the grade span interaction and the Mundlak term (the district charter share) do not.
+
+**Ecological analysis (RQ2).** Within a district, charters tend to be smaller and to span more grades than TPS, and their composition differs. The share of charters in a district also depends heavily on the state.
