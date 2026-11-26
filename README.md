@@ -2,7 +2,7 @@
 
 ### Variance components, response surfaces, and measurement error in SEDA 6.0
 
-Author: Thomas Szymanski Status: 🛠️ In progress
+Author: Thomas Szymanski
 
 ------------------------------------------------------------------------
 
@@ -78,6 +78,9 @@ Structural features that shape the modeling:
 - **States with few or no charter schools** contribute TPS information only, which limits how well state-level charter variance can be estimated.
 - **Non-geographic placeholder districts** (705 schools in 69 state-level placeholders) have no district covariates.
 
+![Districts by number of charter schools](figs/n_charter_hist_log.png)\
+*Figure 1. Number of charter schools per geographic district, with a log-scaled count axis. About 10,000 districts have no charter schools, and a handful have more than 50, so only a small share of districts informs the charter/TPS contrast.*
+
 ------------------------------------------------------------------------
 
 ## Research questions
@@ -111,7 +114,7 @@ This is an **ecological** analysis. School composition is partly a *consequence*
 
 ## Analysis
 
-All code and annotations are in `mlms_on_seda.Rmd`. Fitted model objects are stored in `model-objects/`, and figures in `figs/`. Class-based references for the interpretations are in `materials/`, and the robust-regression background is in `robustness-research/`.
+All code and annotations are in `mlms_on_seda.Rmd`, and the knitted output is `mlms_on_seda.pdf`. Figures are saved to `figs/`. Small fitted objects (the ecological models and a results cache) are in `model-objects/`. The large `brms` fits (`fit.*.RDS`, several hundred MB each) are not in the repository; they are refit by the `.Rmd`.
 
 The `.Rmd` follows this order:
 
@@ -123,6 +126,9 @@ The `.Rmd` follows this order:
 6.  **Robustness extension (RQ1c).** Bayesian refits in `brms` with priors checked by prior predictive simulation. Four fits are compared by PSIS-LOO and WAIC: Gaussian errors, Student-t errors with the degrees of freedom fixed at 4, and each of those with the reported standard errors passed through `se()`. A forest plot compares key coefficients across all five fits, and a t4 QQ plot checks the tail assumption.
 7.  **Summary of findings.**
 
+![Normal QQ plot of learning rates](figs/outcome_qq.png)\
+*Figure 2. Normal QQ plot of the learning-rate outcome. The tails are heavier than a Gaussian error model allows, which motivates the Student-t refits.*
+
 ### Main results
 
 - About 80% of the variance in learning rates is within districts, 13% between districts, and 7% between states.
@@ -132,3 +138,19 @@ The `.Rmd` follows this order:
   - **District SES:** +0.018 for TPS, and -0.012 (+0.018 - 0.029) for charters. The slopes have opposite signs: a higher-SES district is associated with higher learning rates in its TPS, but not in its charters.
   - The other six interactions (LEP, Black, Hispanic, and Asian shares, enrollment, and district economic disadvantage) are not distinguishable from zero in the `lmer` fit (the Black share interaction only just becomes so under t4 + se), and the signs of the three interactions above are the same across all five fits.
 - A Student-t (4 df) error structure that also uses the reported standard errors is clearly preferred under LOO-CV. The signs of the main Charter/TPS and interaction findings hold under it, and the charter gap and the economic disadvantage and district SES interactions remain distinguishable from zero. The grade span interaction and the district charter share (Mundlak) term do not.
+
+![Key coefficients, Gaussian vs. Student-t](figs/forest_two_fits.png)\
+*Figure 3. Key coefficients (95% intervals) from the Gaussian `lmer` fit and the `brms` Student-t (4 df) fit that also uses the reported standard errors. The signs agree across fits. The grade span interaction and the district charter share (Mundlak) term are no longer clearly distinguishable from zero under t4 + se.*
+
+Other diagnostic plots (residuals by level, standard error distributions, pairs plot) are in `figs/`.
+
+- **Variance partition.** In the baseline model charter schools vary less across districts than TPS do, and the two district effects are positively correlated (0.51 in the baseline model, 0.29 in the full model). The interaction model puts the within-district charter gap at +0.055 at the centered means.
+- **Ecological analysis (RQ2).** Within a district, charters tend to be smaller and to span more grades than TPS, and their composition differs. The share of charters in a district depends heavily on the state.
+
+------------------------------------------------------------------------
+
+## Reproducing
+
+1.  Download the SEDA 6.0 files listed above into `data/`.
+2.  Knit `mlms_on_seda.Rmd`. The `eval = FALSE` chunks build `data/seda_an`; the `brms` fits are slow, so budget time for them.
+3.  Required R packages: `lme4`, `lmerTest`, `tidyverse`, `see`, `GGally`, `nlme`, `glmmTMB`, `DHARMa`, `scales`, `brms`.

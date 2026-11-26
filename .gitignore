@@ -12,3 +12,14 @@ model-objects/fit.*.RDS
 # course materials and research notes
 materials/
 robustness-research/
+
+# raw SEDA download (data use agreement forbids redistribution)
+seda_dat.zip
+
+# stray R graphics device output
+Rplots.pdf
+
+# presentation and report, not published for now
+mlms_on_seda_present_tfs.pdf
+mlms_on_seda_report.Rmd
+mlms_on_seda_report.pdf
