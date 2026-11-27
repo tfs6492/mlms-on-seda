@@ -116,6 +116,8 @@ This is an **ecological** analysis. School composition is partly a *consequence*
 
 All code and annotations are in `mlms_on_seda.Rmd`, and the knitted output is `mlms_on_seda.pdf`. Figures are saved to `figs/`. Small fitted objects (the ecological models and a results cache) are in `model-objects/`. The large `brms` fits (`fit.*.RDS`, several hundred MB each) are not in the repository; they are refit by the `.Rmd`.
 
+A pruned version of the master `.Rmd`, `mlms_on_seda_report.Rmd`, knits to `mlms_on_seda_report.pdf`: a short report (at most 10 pages) laid out as Data, Methods, and Results, followed by a summary of findings and concerns for feedback. Its prose is taken verbatim from `mlms_on_seda.Rmd` and this README. It reads its results from `model-objects/report_cache.rds` and `figs/`, so it knits in seconds without refitting the models; rebuild the cache if the master models change.
+
 The `.Rmd` follows this order:
 
 1.  **Introduction and data processing.** Joins the four SEDA files into one school-level file and builds the analysis sample (`seda_an`, 54,074 schools in 11,569 districts and 51 states: 2,998 charters and 51,076 TPS). Schools with missing learning rates, no school covariates, special-education or virtual schools, or missing covariates are dropped, and an attrition table is produced.
